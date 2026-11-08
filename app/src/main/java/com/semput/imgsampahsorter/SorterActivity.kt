@@ -4,14 +4,13 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
-import android.os.SystemClock
+import android.view.GestureDetector
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
@@ -23,6 +22,7 @@ import android.widget.Toast
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -30,6 +30,7 @@ import kotlin.math.min
  *  swipe down  -> move to "trash" folder (hidden from gallery, can be undone)
  *  swipe up    -> move to "good" folder
  *  swipe left  -> next image, swipe right -> previous image
+ *  pinch / double-tap -> zoom (drag to look around while zoomed)
  *  tap         -> hide / show the buttons
  */
 class SorterActivity : Activity() {
@@ -47,8 +48,10 @@ class SorterActivity : Activity() {
 
     private lateinit var loader: ImageLoader
     private lateinit var root: FrameLayout
-    private lateinit var imageView: ImageView
-    private lateinit var stamp: TextView
+    private lateinit var imageView: ImageView   // current image
+    private lateinit var peekView: ImageView    // neighbour shown while swiping
+    private var peekFile: File? = null
+    private lateinit var badge: TextView
     private lateinit var message: TextView
     private lateinit var info: TextView
     private lateinit var trashButton: TextView
@@ -96,7 +99,16 @@ class SorterActivity : Activity() {
         val match = FrameLayout.LayoutParams.MATCH_PARENT
         val wrap = FrameLayout.LayoutParams.WRAP_CONTENT
 
-        imageView = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+        peekView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            visibility = View.INVISIBLE
+        }
+        root.addView(peekView, FrameLayout.LayoutParams(match, match))
+
+        imageView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.BLACK)
+        }
         root.addView(imageView, FrameLayout.LayoutParams(match, match))
 
         message = Ui.text(this, "", 16f, Ui.TEXT_DIM).apply {
@@ -105,17 +117,7 @@ class SorterActivity : Activity() {
         }
         root.addView(message, FrameLayout.LayoutParams(match, wrap, Gravity.CENTER))
 
-        stamp = TextView(this).apply {
-            textSize = 40f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(8), dp(24), dp(8))
-            alpha = 0f
-            rotation = -10f
-        }
-        root.addView(stamp, FrameLayout.LayoutParams(wrap, wrap, Gravity.CENTER))
-
-        // Invisible layer that catches swipes. It never moves, so gesture maths stay simple.
+        // Invisible layer that catches gestures. It never moves, so the maths stay simple.
         val touchLayer = View(this)
         touchLayer.setOnTouchListener { _, e -> onTouch(e); true }
         root.addView(touchLayer, FrameLayout.LayoutParams(match, match))
@@ -137,6 +139,17 @@ class SorterActivity : Activity() {
         topBar.addView(trashButton)
         root.addView(topBar, FrameLayout.LayoutParams(match, wrap, Gravity.TOP))
 
+        // Quick 👍 / 👎 feedback, top right
+        badge = TextView(this).apply {
+            textSize = 34f
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            alpha = 0f
+        }
+        root.addView(badge, FrameLayout.LayoutParams(wrap, wrap, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(76); rightMargin = dp(16)
+        })
+
         // Bottom bar: hint + Trash / Undo / Good buttons
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -144,7 +157,7 @@ class SorterActivity : Activity() {
             setPadding(dp(12), dp(8), dp(12), dp(14))
         }
         bottomBar.addView(
-            Ui.text(this, "↓ trash    ↑ good    ← → browse    tap: hide buttons", 12f, Ui.TEXT_DIM)
+            Ui.text(this, "↓ trash   ↑ good   ← → browse   pinch / double-tap: zoom   tap: hide", 12f, Ui.TEXT_DIM)
                 .apply { gravity = Gravity.CENTER },
             LinearLayout.LayoutParams(match, wrap)
         )
@@ -153,13 +166,13 @@ class SorterActivity : Activity() {
             leftMargin = dp(4); rightMargin = dp(4)
         }
         row.addView(Ui.button(this, "🗑  Trash", Ui.RED).apply {
-            setOnClickListener { decide(toTrash = true) }
+            setOnClickListener { decide(toTrash = true, flyOut = false) }
         }, rowParams())
         row.addView(Ui.button(this, "↶  Undo", Ui.GREY).apply {
             setOnClickListener { undo() }
         }, rowParams())
         row.addView(Ui.button(this, "✓  Good", Ui.GREEN).apply {
-            setOnClickListener { decide(toTrash = false) }
+            setOnClickListener { decide(toTrash = false, flyOut = false) }
         }, rowParams())
         bottomBar.addView(row, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
         root.addView(bottomBar, FrameLayout.LayoutParams(match, wrap, Gravity.BOTTOM))
@@ -186,6 +199,7 @@ class SorterActivity : Activity() {
     private fun reload(keepName: String?) {
         images = FileOps.listImages(dir)
         index = images.indexOfFirst { it.name == keepName }.coerceAtLeast(0)
+        resetView()
         show()
     }
 
@@ -195,6 +209,7 @@ class SorterActivity : Activity() {
         val total = trashTotal()
         trashButton.text = "Trash ($total)"
         trashButton.background = Ui.rounded(this, if (total > 0) Ui.RED else Ui.GREY)
+        hidePeek()
 
         if (images.isEmpty()) {
             imageView.setImageDrawable(null)
@@ -231,6 +246,29 @@ class SorterActivity : Activity() {
         for (o in intArrayOf(1, -1, 2)) images.getOrNull(index + o)?.let { loader.prefetch(it) }
     }
 
+    /** Put [f]'s picture into the peek view (the neighbour that slides in alongside). */
+    private fun setPeek(f: File?) {
+        if (f == null) { hidePeek(); return }
+        peekView.visibility = View.VISIBLE
+        if (peekFile == f) return
+        peekFile = f
+        val cached = loader.cached(f)
+        if (cached != null) peekView.setImageBitmap(cached)
+        else {
+            peekView.setImageDrawable(null)
+            loader.load(f) { bmp -> if (peekFile == f && bmp != null) peekView.setImageBitmap(bmp) }
+        }
+    }
+
+    private fun hidePeek() {
+        peekView.animate().cancel()
+        peekView.visibility = View.INVISIBLE
+        peekView.translationX = 0f
+        peekView.translationY = 0f
+        peekView.setImageDrawable(null)
+        peekFile = null
+    }
+
     private fun setBars(visible: Boolean) {
         barsVisible = visible
         for (v in listOf(topBar, bottomBar)) {
@@ -244,6 +282,18 @@ class SorterActivity : Activity() {
         }
     }
 
+    private fun flashBadge(good: Boolean) {
+        badge.animate().cancel()
+        badge.text = if (good) "👍" else "👎"
+        badge.background = Ui.rounded(this, if (good) Ui.GREEN else Ui.RED, 40)
+        badge.alpha = 1f
+        badge.scaleX = 0.6f; badge.scaleY = 0.6f
+        badge.animate().scaleX(1f).scaleY(1f).setDuration(120).withEndAction {
+            badge.animate().alpha(0f).setStartDelay(350).setDuration(200)
+                .withEndAction { badge.animate().setStartDelay(0) }.start()
+        }.start()
+    }
+
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     private fun buzz() {
@@ -253,45 +303,177 @@ class SorterActivity : Activity() {
         )
     }
 
+    // ---------------------------------------------------------------- zoom
+
+    private var zoom = 1f
+    private val maxZoom = 6f
+
+    private fun zoomed() = zoom > 1.01f
+
+    /** How far the zoomed picture may be dragged before its edge reaches the screen edge. */
+    private fun clampPan() {
+        val w = root.width.toFloat()
+        val h = root.height.toFloat()
+        val d = imageView.drawable
+        var cw = w
+        var ch = h
+        if (d != null && d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+            val aspect = d.intrinsicWidth.toFloat() / d.intrinsicHeight
+            if (w / h > aspect) { ch = h; cw = h * aspect } else { cw = w; ch = w / aspect }
+        }
+        val maxX = max(0f, (cw * zoom - w) / 2f)
+        val maxY = max(0f, (ch * zoom - h) / 2f)
+        imageView.translationX = imageView.translationX.coerceIn(-maxX, maxX)
+        imageView.translationY = imageView.translationY.coerceIn(-maxY, maxY)
+    }
+
+    /** Scale by [factor] keeping the screen point (fx, fy) still. */
+    private fun zoomBy(factor: Float, fx: Float, fy: Float) {
+        val newZoom = (zoom * factor).coerceIn(0.8f, maxZoom)
+        val f = newZoom / zoom
+        val cx = root.width / 2f
+        val cy = root.height / 2f
+        imageView.translationX = (fx - cx) * (1 - f) + f * imageView.translationX
+        imageView.translationY = (fy - cy) * (1 - f) + f * imageView.translationY
+        zoom = newZoom
+        imageView.scaleX = zoom; imageView.scaleY = zoom
+    }
+
+    private fun animateZoomTo(target: Float, fx: Float, fy: Float) {
+        val cx = root.width / 2f
+        val cy = root.height / 2f
+        val f = target / zoom
+        var tx = (fx - cx) * (1 - f) + f * imageView.translationX
+        var ty = (fy - cy) * (1 - f) + f * imageView.translationY
+        zoom = target
+        if (target <= 1.01f) { tx = 0f; ty = 0f; zoom = 1f }
+        // Work out clamped end position without moving yet.
+        val oldX = imageView.translationX
+        val oldY = imageView.translationY
+        imageView.translationX = tx; imageView.translationY = ty
+        clampPan()
+        tx = imageView.translationX; ty = imageView.translationY
+        imageView.translationX = oldX; imageView.translationY = oldY
+        imageView.animate().scaleX(zoom).scaleY(zoom).translationX(tx).translationY(ty)
+            .setDuration(180).start()
+    }
+
+    private fun resetView() {
+        imageView.animate().cancel()
+        zoom = 1f
+        imageView.scaleX = 1f; imageView.scaleY = 1f
+        imageView.translationX = 0f; imageView.translationY = 0f
+        imageView.alpha = 1f
+    }
+
     // ---------------------------------------------------------------- gestures
 
     private var downX = 0f
     private var downY = 0f
-    private var downTime = 0L
-    private var axis = 0 // 0 = undecided, 1 = horizontal, 2 = vertical
+    private var lastX = 0f
+    private var lastY = 0f
+    private var axis = 0 // 0 = undecided, 1 = horizontal, 2 = vertical, 3 = zoom / pan
     private var tracker: VelocityTracker? = null
     private val slop by lazy { ViewConfiguration.get(this).scaledTouchSlop }
     private val flingVelocity by lazy { 1000 * resources.displayMetrics.density }
 
+    private val scaleDetector by lazy {
+        ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
+                if (busy || images.isEmpty()) return false
+                if (axis == 1 || axis == 2) {
+                    // A swipe had started — cancel it and zoom instead.
+                    imageView.translationX = 0f; imageView.translationY = 0f
+                    hidePeek()
+                }
+                axis = 3
+                return true
+            }
+
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                zoomBy(d.scaleFactor, d.focusX, d.focusY)
+                return true
+            }
+
+            override fun onScaleEnd(d: ScaleGestureDetector) {
+                if (zoom < 1.05f) animateZoomTo(1f, d.focusX, d.focusY) else clampPan()
+            }
+        })
+    }
+
+    private val tapDetector by lazy {
+        GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                setBars(!barsVisible)
+                return true
+            }
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (busy || images.isEmpty()) return true
+                if (zoomed()) animateZoomTo(1f, e.x, e.y) else animateZoomTo(2.5f, e.x, e.y)
+                return true
+            }
+        })
+    }
+
     private fun onTouch(e: MotionEvent) {
-        if (busy) return
         if (images.isEmpty()) {
-            if (e.actionMasked == MotionEvent.ACTION_UP) setBars(!barsVisible)
+            tapDetector.onTouchEvent(e)
             return
         }
+        if (busy) return
+        handleTouch(e)
+        // Detectors run after, so a double-tap zoom isn't cancelled by the touch-down handling.
+        scaleDetector.onTouchEvent(e)
+        tapDetector.onTouchEvent(e)
+    }
+
+    private fun handleTouch(e: MotionEvent) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downX = e.rawX; downY = e.rawY
-                downTime = SystemClock.uptimeMillis()
-                axis = 0
+                imageView.animate().cancel()
+                downX = e.x; downY = e.y
+                lastX = e.x; lastY = e.y
+                axis = if (zoomed()) 3 else 0
                 tracker?.recycle()
                 tracker = VelocityTracker.obtain().also { it.addMovement(e) }
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // Keep panning smoothly with whichever finger is left.
+                val keep = if (e.actionIndex == 0) 1 else 0
+                lastX = e.getX(keep); lastY = e.getY(keep)
+            }
             MotionEvent.ACTION_MOVE -> {
                 tracker?.addMovement(e)
-                val dx = e.rawX - downX
-                val dy = e.rawY - downY
+                if (axis == 3) {
+                    if (!scaleDetector.isInProgress && e.pointerCount == 1 && zoomed()) {
+                        imageView.translationX += e.x - lastX
+                        imageView.translationY += e.y - lastY
+                        clampPan()
+                    }
+                    lastX = e.x; lastY = e.y
+                    return
+                }
+                if (axis == 0 && zoomed()) { axis = 3; lastX = e.x; lastY = e.y; return }
+                val dx = e.x - downX
+                val dy = e.y - downY
                 if (axis == 0 && hypot(dx, dy) > slop) axis = if (abs(dx) > abs(dy)) 1 else 2
+                val w = root.width.toFloat()
                 if (axis == 1) {
-                    val atEdge = (dx < 0 && index >= images.size - 1) || (dx > 0 && index <= 0)
-                    imageView.translationX = if (atEdge) dx * 0.25f else dx
+                    val neighbour = images.getOrNull(if (dx < 0) index + 1 else index - 1)
+                    val x = if (neighbour == null) dx * 0.25f else dx
+                    imageView.translationX = x
+                    if (neighbour != null) {
+                        setPeek(neighbour)
+                        peekView.translationY = 0f
+                        peekView.translationX = if (dx < 0) x + w else x - w
+                    } else hidePeek()
                 } else if (axis == 2) {
                     imageView.translationY = dy
-                    val progress = min(1f, abs(dy) / verticalThreshold())
-                    showStamp(toTrash = dy > 0, progress = progress)
-                    imageView.alpha = 1f - 0.4f * progress
-                    val s = 1f - 0.08f * progress
-                    imageView.scaleX = s; imageView.scaleY = s
+                    // Show what will come next underneath the picture being dragged away.
+                    setPeek(images.getOrNull(index + 1) ?: images.getOrNull(index - 1))
+                    peekView.translationX = 0f
+                    peekView.translationY = 0f
                 }
             }
             MotionEvent.ACTION_UP -> {
@@ -300,10 +482,9 @@ class SorterActivity : Activity() {
                 val vx = tracker?.xVelocity ?: 0f
                 val vy = tracker?.yVelocity ?: 0f
                 tracker?.recycle(); tracker = null
-                val dx = e.rawX - downX
-                val dy = e.rawY - downY
+                val dx = e.x - downX
+                val dy = e.y - downY
                 when (axis) {
-                    0 -> if (SystemClock.uptimeMillis() - downTime < 300) setBars(!barsVisible)
                     1 -> {
                         val hThr = root.width * 0.2f
                         when {
@@ -313,11 +494,11 @@ class SorterActivity : Activity() {
                         }
                     }
                     2 -> {
-                        val vThr = verticalThreshold()
+                        val vThr = root.height * 0.18f
                         val minDrag = slop * 3
                         when {
-                            dy > vThr || (vy > flingVelocity && dy > minDrag) -> decide(toTrash = true)
-                            dy < -vThr || (vy < -flingVelocity && dy < -minDrag) -> decide(toTrash = false)
+                            dy > vThr || (vy > flingVelocity && dy > minDrag) -> decide(toTrash = true, flyOut = true)
+                            dy < -vThr || (vy < -flingVelocity && dy < -minDrag) -> decide(toTrash = false, flyOut = true)
                             else -> springBack()
                         }
                     }
@@ -325,79 +506,68 @@ class SorterActivity : Activity() {
             }
             MotionEvent.ACTION_CANCEL -> {
                 tracker?.recycle(); tracker = null
-                springBack()
+                if (axis == 1 || axis == 2) springBack()
             }
         }
     }
 
-    private fun verticalThreshold() = root.height * 0.18f
-
-    private fun showStamp(toTrash: Boolean, progress: Float) {
-        val color = if (toTrash) Ui.RED else Ui.GREEN
-        stamp.text = if (toTrash) "TRASH" else "GOOD"
-        stamp.setTextColor(color)
-        stamp.background = GradientDrawable().apply {
-            setStroke(dp(4), color)
-            cornerRadius = dp(10).toFloat()
-            setColor(Color.parseColor("#99000000"))
-        }
-        stamp.alpha = progress
-    }
-
     private fun springBack() {
-        imageView.animate().translationX(0f).translationY(0f).alpha(1f).scaleX(1f).scaleY(1f)
-            .setDuration(160).start()
-        stamp.animate().alpha(0f).setDuration(160).start()
+        val w = root.width.toFloat()
+        val peekTarget = when {
+            peekView.translationX > 0 -> w
+            peekView.translationX < 0 -> -w
+            else -> 0f
+        }
+        imageView.animate().translationX(0f).translationY(0f).setDuration(160).start()
+        if (peekView.visibility == View.VISIBLE && peekTarget != 0f) {
+            peekView.animate().translationX(peekTarget).setDuration(160).withEndAction { hidePeek() }.start()
+        } else {
+            hidePeek()
+        }
     }
 
-    private fun resetImageView() {
-        imageView.animate().cancel()
-        imageView.translationX = 0f; imageView.translationY = 0f
-        imageView.scaleX = 1f; imageView.scaleY = 1f
-        imageView.alpha = 1f
-    }
-
+    /** Pager-style: current slides out while the neighbour slides in beside it. */
     private fun slide(step: Int) {
         busy = true
         val w = root.width.toFloat()
-        imageView.animate().translationX(-step * w).alpha(0f).setDuration(130).withEndAction {
+        setPeek(images.getOrNull(index + step))
+        if (peekView.translationX == 0f) peekView.translationX = step * w
+        imageView.animate().translationX(-step * w).setDuration(160).start()
+        peekView.animate().translationX(0f).setDuration(160).withEndAction {
+            val d = peekView.drawable
             index += step
+            resetView()
             show()
-            imageView.translationX = step * w * 0.25f
-            imageView.alpha = 0f
-            imageView.animate().translationX(0f).alpha(1f).setDuration(130)
-                .withEndAction { busy = false }.start()
+            if (imageView.drawable == null && d != null) imageView.setImageDrawable(d)
+            busy = false
         }.start()
-    }
-
-    /** Fade the (new) current image in after a move or undo. */
-    private fun popIn() {
-        resetImageView()
-        show()
-        imageView.alpha = 0f
-        imageView.scaleX = 0.92f; imageView.scaleY = 0.92f
-        imageView.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(160)
-            .withEndAction { busy = false }.start()
     }
 
     // ---------------------------------------------------------------- actions
 
-    private fun decide(toTrash: Boolean) {
+    /**
+     * Move the current image to trash or good. [flyOut] = it was swiped, so let it keep
+     * travelling off-screen (revealing the next image underneath); buttons swap instantly.
+     */
+    private fun decide(toTrash: Boolean, flyOut: Boolean) {
         if (busy || images.isEmpty()) return
-        busy = true
         val f = images[index]
-        showStamp(toTrash, 1f)
-        stamp.animate().alpha(0f).setStartDelay(120).setDuration(200)
-            .withEndAction { stamp.animate().setStartDelay(0) }.start()
-        val h = root.height.toFloat()
-        imageView.animate().translationY(if (toTrash) h else -h).alpha(0f).setDuration(180).withEndAction {
+        val complete = {
             if (moveCurrent(f, toTrash)) {
                 buzz()
+                flashBadge(good = !toTrash)
             } else {
                 toast("Couldn't move ${f.name}")
             }
-            popIn()
-        }.start()
+            resetView()
+            show()
+            busy = false
+        }
+        if (!flyOut) { complete(); return }
+        busy = true
+        val h = root.height.toFloat()
+        imageView.animate().translationY(if (toTrash) h else -h).setDuration(120)
+            .withEndAction { complete() }.start()
     }
 
     private fun moveCurrent(f: File, toTrash: Boolean): Boolean {
@@ -431,8 +601,8 @@ class SorterActivity : Activity() {
         index = at
         if (m.toTrash) trashCount-- else goodCount--
         FileOps.scan(this, listOf(m.dest, back))
-        busy = true
-        popIn()
+        resetView()
+        show()
         toast(if (m.toTrash) "Back from trash" else "Back from good")
     }
 
@@ -491,7 +661,7 @@ class SorterActivity : Activity() {
         trashCount = 0
         FileOps.scan(this, changed)
         toast("Restored ${changed.size / 2} images")
-        resetImageView()
+        resetView()
         show()
     }
 
@@ -510,6 +680,7 @@ class SorterActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        if (zoomed()) { animateZoomTo(1f, root.width / 2f, root.height / 2f); return }
         leave()
     }
 }

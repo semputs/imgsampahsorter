@@ -12,6 +12,7 @@ Android app for sorting a folder of images fast with swipes.
 - **Undo** button puts back the last image you trashed or marked good (as many steps as you like).
 - **Trash (N)** button at the top: delete everything in trash forever (asks to confirm), or restore all.
 - When you leave a folder with images still in trash, it asks whether to delete them now or keep them for later.
+- Pinch or double-tap to zoom; drag to look around while zoomed.
 - Remembers where you were in each folder.
 
 ## Merge folders
