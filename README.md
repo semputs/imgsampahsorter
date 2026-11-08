@@ -14,6 +14,10 @@ Android app for sorting a folder of images fast with swipes.
 - When you leave a folder with images still in trash, it asks whether to delete them now or keep them for later.
 - Remembers where you were in each folder.
 
+## Merge folders
+
+On the start screen tap **🔀 Merge…**, tick the folders to combine (e.g. several `good` folders), go to the folder they should all go into (or tap **＋ New folder**), then tap **Merge**. Files with the same name get `_1`, `_2`… added. Emptied folders are removed.
+
 The `good` and `trash` folders are created inside the folder you're sorting.
 
 ## Install

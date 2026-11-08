@@ -64,6 +64,42 @@ object FileOps {
         }
     }
 
+    class MergeResult(val moved: Int, val renamed: Int, val failed: Int, val changed: List<File>)
+
+    /**
+     * Move every image from [sources] into [dest]. If a name is already taken it becomes
+     * name_1.jpg, name_2.jpg... Source folders left completely empty are removed.
+     */
+    fun merge(sources: List<File>, dest: File, onProgress: (Int, Int) -> Unit): MergeResult {
+        dest.mkdirs()
+        val work = sources.filter { it.absolutePath != dest.absolutePath }
+            .flatMap { src -> listImages(src) }
+        var moved = 0
+        var renamed = 0
+        var failed = 0
+        val changed = ArrayList<File>()
+        work.forEachIndexed { i, f ->
+            val target = uniqueTarget(dest, f.name)
+            if (move(f, target)) {
+                moved++
+                if (target.name != f.name) renamed++
+                changed.add(f); changed.add(target)
+            } else {
+                failed++
+            }
+            onProgress(i + 1, work.size)
+        }
+        for (src in sources) {
+            if (src.absolutePath == dest.absolutePath) continue
+            val left = src.listFiles() ?: continue
+            if (left.all { it.isFile && it.name == ".nomedia" }) {
+                left.forEach { it.delete() }
+                src.delete()
+            }
+        }
+        return MergeResult(moved, renamed, failed, changed)
+    }
+
     /** Tell the phone's gallery that these paths changed. */
     fun scan(ctx: Context, files: Collection<File>) {
         if (files.isEmpty()) return
