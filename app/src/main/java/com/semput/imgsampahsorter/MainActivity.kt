@@ -74,7 +74,7 @@ class MainActivity : Activity() {
 
     private fun gap(dp: Int) = LinearLayout.LayoutParams(
         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-    ).apply { topMargin = Ui.dp(this, dp) }
+    ).apply { topMargin = Ui.dp(this@MainActivity, dp) }
 
     private fun renderPermission() {
         root.gravity = Gravity.CENTER
