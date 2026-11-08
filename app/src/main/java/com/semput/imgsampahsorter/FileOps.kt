@@ -20,9 +20,10 @@ object FileOps {
             .sortedWith(nameOrder)
             .toMutableList()
 
+    /** Subfolders, normal ones first, then hidden ".something" ones. */
     fun listSubfolders(dir: File): List<File> =
-        (dir.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") } ?: emptyList())
-            .sortedWith(nameOrder)
+        (dir.listFiles()?.filter { it.isDirectory } ?: emptyList())
+            .sortedWith(compareBy<File> { it.name.startsWith(".") }.then(nameOrder))
 
     /** Files sitting in the trash folder (ignores the hidden .nomedia marker). */
     fun trashFiles(dir: File): List<File> =
