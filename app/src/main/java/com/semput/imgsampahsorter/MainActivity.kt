@@ -127,14 +127,15 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------------- merge mode state
-    private var mergeMode = false
+    /** 0 = normal, 1 = selecting folders to merge, 2 = choosing where they go. */
+    private var mergeStep = 0
     private val selected = LinkedHashSet<String>()
 
     private fun renderBrowser() {
         root.gravity = Gravity.NO_GRAVITY
         val dir = current
 
-        if (mergeMode) renderMergeHeader(dir) else renderSortHeader(dir)
+        if (mergeStep != 0) renderMergeHeader(dir) else renderSortHeader(dir)
 
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fun row(label: String, folder: File?, onClick: () -> Unit) {
@@ -151,7 +152,7 @@ class MainActivity : Activity() {
                 setPadding(p, p, p, p)
                 setOnClickListener { onClick() }
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (mergeMode && folder != null) {
+            if (mergeStep == 1 && folder != null) {
                 val on = folder.absolutePath in selected
                 line.addView(Ui.button(this, if (on) "☑ Selected" else "☐ Select", if (on) Ui.GREEN else Ui.GREY).apply {
                     textSize = 14f
@@ -211,7 +212,7 @@ class MainActivity : Activity() {
                 if (count > 0) setOnClickListener { openSorter(dir) }
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             buttons.addView(Ui.button(this, "🔀 Merge…", Ui.GREY).apply {
-                setOnClickListener { mergeMode = true; selected.clear(); render() }
+                setOnClickListener { mergeStep = 1; selected.clear(); render() }
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { leftMargin = Ui.dp(this@MainActivity, 8) })
@@ -220,47 +221,88 @@ class MainActivity : Activity() {
     }
 
     private fun renderMergeHeader(dir: File?) {
-        root.addView(Ui.text(this, "Merge folders", 24f))
+        if (mergeStep == 1) renderMergeSelect(dir) else renderMergeDestination(dir)
+    }
+
+    private fun cancelMerge() {
+        mergeStep = 0
+        selected.clear()
+        render()
+    }
+
+    private fun selectedSummary(): String {
+        val names = selected.map { File(it).let { f -> "${f.parentFile?.name ?: ""}/${f.name}" } }
+        return if (names.isEmpty()) "Nothing selected yet"
+        else "Selected (${names.size}): " + names.joinToString(", ")
+    }
+
+    /** Step 1: tick the folders to merge. */
+    private fun renderMergeSelect(dir: File?) {
+        root.addView(Ui.text(this, "Merge · step 1 of 2", 24f))
         root.addView(Ui.text(
             this,
-            "1. Tap ☐ Select on each folder to merge (e.g. your \"good\" folders).\n" +
-                "2. Go to the folder they should all go into, or make a new one.\n" +
-                "3. Tap Merge. Same names get _1, _2… added.",
+            "Tap ☐ Select on each folder you want to merge (e.g. your \"good\" folders). " +
+                "You can open other folders and keep selecting.",
             13f, Ui.TEXT_DIM
         ), gap(8))
+        root.addView(Ui.text(this, selectedSummary(), 14f, if (selected.isEmpty()) Ui.TEXT_DIM else Ui.GREEN), gap(10))
+        root.addView(Ui.text(this, dir?.absolutePath ?: "Storage", 13f, Ui.TEXT_DIM), gap(10))
 
-        val names = selected.map { File(it).let { f -> "${f.parentFile?.name ?: ""}/${f.name}" } }
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        buttons.addView(Ui.button(
+            this, "Next: choose where →", if (selected.isNotEmpty()) Ui.BLUE else Ui.GREY
+        ).apply {
+            if (selected.isNotEmpty()) setOnClickListener { mergeStep = 2; render() }
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        buttons.addView(Ui.button(this, "Cancel", Ui.GREY).apply {
+            setOnClickListener { cancelMerge() }
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = Ui.dp(this@MainActivity, 8) })
+        root.addView(buttons, gap(8))
+    }
+
+    /** Step 2: browse to (or create) the folder everything goes into. */
+    private fun renderMergeDestination(dir: File?) {
+        root.addView(Ui.text(this, "Merge · step 2 of 2", 24f))
         root.addView(Ui.text(
             this,
-            if (names.isEmpty()) "Nothing selected yet" else "Selected (${names.size}): " + names.joinToString(", "),
-            14f, if (names.isEmpty()) Ui.TEXT_DIM else Ui.GREEN
-        ), gap(10))
-
-        root.addView(Ui.text(this, "Merge into: " + (dir?.absolutePath ?: "(open a folder)"), 13f, Ui.TEXT_DIM), gap(10))
+            "Open the folder the images should go into, or tap ＋ New folder to make one here. " +
+                "Same names get _1, _2… added.",
+            13f, Ui.TEXT_DIM
+        ), gap(8))
+        root.addView(Ui.text(this, selectedSummary(), 14f, Ui.GREEN), gap(10))
+        root.addView(Ui.text(this, "Destination: " + (dir?.absolutePath ?: "(open a folder)"), 14f, Ui.TEXT), gap(10))
 
         val sources = selected.map { File(it) }.filter { dir != null && it.absolutePath != dir.absolutePath }
-        val canMerge = dir != null && sources.isNotEmpty()
+        val dest = dir
+        val canMerge = dest != null && sources.isNotEmpty()
         root.addView(Ui.button(
             this,
-            if (canMerge) "Merge ${sources.size} folder${if (sources.size == 1) "" else "s"} into \"${dir!!.name}\""
-            else "Merge",
+            if (canMerge) "✓ Merge into \"${dest!!.name}\"" else "Pick a destination folder",
             if (canMerge) Ui.GREEN else Ui.GREY
         ).apply {
-            if (canMerge) setOnClickListener { confirmMerge(sources, dir!!) }
+            if (canMerge) setOnClickListener { confirmMerge(sources, dest!!) }
         }, gap(8))
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun half() = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+        fun third() = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
             leftMargin = Ui.dp(this@MainActivity, 3); rightMargin = Ui.dp(this@MainActivity, 3)
         }
         if (dir != null) {
             buttons.addView(Ui.button(this, "＋ New folder", Ui.BLUE).apply {
+                textSize = 14f
                 setOnClickListener { newFolderDialog(dir) }
-            }, half())
+            }, third())
         }
+        buttons.addView(Ui.button(this, "← Back", Ui.GREY).apply {
+            textSize = 14f
+            setOnClickListener { mergeStep = 1; render() }
+        }, third())
         buttons.addView(Ui.button(this, "Cancel", Ui.GREY).apply {
-            setOnClickListener { mergeMode = false; selected.clear(); render() }
-        }, half())
+            textSize = 14f
+            setOnClickListener { cancelMerge() }
+        }, third())
         root.addView(buttons, gap(8))
     }
 
@@ -312,7 +354,7 @@ class MainActivity : Activity() {
             FileOps.scan(this, result.changed)
             ui.post {
                 progress.dismiss()
-                mergeMode = false
+                mergeStep = 0
                 selected.clear()
                 AlertDialog.Builder(this)
                     .setTitle("Merge done")
@@ -338,14 +380,14 @@ class MainActivity : Activity() {
         val dir = current
         if (!hasAccess()) { super.onBackPressed(); return }
         if (dir == null) {
-            if (mergeMode) { mergeMode = false; selected.clear(); render() } else super.onBackPressed()
+            if (mergeStep != 0) cancelMerge() else super.onBackPressed()
             return
         }
         val parent = parentOf(dir)
         when {
             parent != null -> go(parent)
             volumes().size > 1 -> go(null)
-            mergeMode -> { mergeMode = false; selected.clear(); render() }
+            mergeStep != 0 -> cancelMerge()
             else -> super.onBackPressed()
         }
     }

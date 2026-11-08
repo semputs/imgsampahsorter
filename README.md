@@ -17,7 +17,12 @@ Android app for sorting a folder of images fast with swipes.
 
 ## Merge folders
 
-On the start screen tap **🔀 Merge…**, tick the folders to combine (e.g. several `good` folders), go to the folder they should all go into (or tap **＋ New folder**), then tap **Merge**. Files with the same name get `_1`, `_2`… added. Emptied folders are removed.
+On the start screen tap **🔀 Merge…**.
+
+1. **Step 1:** tick ☐ Select on the folders to combine (e.g. several `good` folders), then tap **Next**.
+2. **Step 2:** open the folder they should all go into, or tap **＋ New folder** to make one, then tap **✓ Merge into**.
+
+ Files with the same name get `_1`, `_2`… added. Emptied folders are removed.
 
 The `good` and `trash` folders are created inside the folder you're sorting.
 
