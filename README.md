@@ -13,7 +13,8 @@ Android app for sorting a folder of images fast with swipes.
 - **Trash (N)** button at the top: delete everything in trash forever (asks to confirm), or restore all.
 - When you leave a folder with images still in trash, it asks whether to delete them now or keep them for later.
 - Pinch or double-tap to zoom; drag to look around while zoomed.
-- Remembers where you were in each folder.
+- Remembers where you were in each folder, and asks on opening whether to continue or start from 1.
+- Tap the counter at the top (e.g. "12 / 300") to jump to any image number.
 
 ## Merge folders
 

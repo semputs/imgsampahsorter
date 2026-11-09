@@ -14,6 +14,8 @@ import android.view.ScaleGestureDetector
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.text.InputType
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -71,6 +73,7 @@ class SorterActivity : Activity() {
         loader = ImageLoader(min(dm.widthPixels, dm.heightPixels))
         buildUi()
         reload(prefs.getString(posKey, null))
+        if (index > 0) askWhereToStart()
     }
 
     override fun onRestart() {
@@ -129,7 +132,10 @@ class SorterActivity : Activity() {
             setBackgroundColor(Color.parseColor("#AA000000"))
             setPadding(dp(16), dp(10), dp(12), dp(10))
         }
-        info = Ui.text(this, "", 14f)
+        info = Ui.text(this, "", 14f).apply {
+            // Tap the counter to jump to any image number.
+            setOnClickListener { jumpDialog() }
+        }
         topBar.addView(info, LinearLayout.LayoutParams(0, wrap, 1f))
         trashButton = Ui.button(this, "Trash (0)", Ui.GREY).apply {
             textSize = 14f
@@ -157,7 +163,7 @@ class SorterActivity : Activity() {
             setPadding(dp(12), dp(8), dp(12), dp(14))
         }
         bottomBar.addView(
-            Ui.text(this, "↓ trash   ↑ good   ← → browse   pinch / double-tap: zoom   tap: hide", 12f, Ui.TEXT_DIM)
+            Ui.text(this, "↓ trash   ↑ good   ← → browse   pinch / double-tap: zoom   tap: hide   tap counter: jump", 12f, Ui.TEXT_DIM)
                 .apply { gravity = Gravity.CENTER },
             LinearLayout.LayoutParams(match, wrap)
         )
@@ -604,6 +610,54 @@ class SorterActivity : Activity() {
         resetView()
         show()
         toast(if (m.toTrash) "Back from trash" else "Back from good")
+    }
+
+    private fun jumpTo(i: Int) {
+        if (images.isEmpty()) return
+        index = i.coerceIn(0, images.size - 1)
+        resetView()
+        show()
+    }
+
+    /** Opened a folder with a saved spot: continue there, or start over from #1? */
+    private fun askWhereToStart() {
+        val name = images.getOrNull(index)?.name ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Where to start?")
+            .setMessage("Last time you were at image ${index + 1} of ${images.size}\n($name).")
+            .setPositiveButton("Continue from ${index + 1}") { _, _ -> }
+            .setNegativeButton("Start from 1") { _, _ -> jumpTo(0) }
+            .setNeutralButton("Pick number…") { _, _ -> jumpDialog() }
+            .show()
+    }
+
+    /** Type an image number to go straight to it. */
+    private fun jumpDialog() {
+        if (busy || images.isEmpty()) return
+        val pad = dp(20)
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "1 – ${images.size}"
+            setText((index + 1).toString())
+            selectAll()
+        }
+        val box = FrameLayout(this).apply {
+            setPadding(pad, dp(8), pad, 0)
+            addView(input)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Go to image (1 – ${images.size})")
+            .setView(box)
+            .setPositiveButton("Go") { _, _ ->
+                val n = input.text.toString().toIntOrNull()
+                if (n != null) jumpTo(n - 1)
+            }
+            .setNeutralButton("First") { _, _ -> jumpTo(0) }
+            .setNegativeButton("Last") { _, _ -> jumpTo(images.size - 1) }
+            .create()
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        input.requestFocus()
     }
 
     private fun trashDialog() {
