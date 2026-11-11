@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.5"
+VERSION = "1.6"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -139,6 +139,7 @@ class ComfyProcess:
         self.last_error = ""
         self.enabled = bool(PATHS.get("python") and PATHS.get("comfy_dir"))
         self.restart_requested = False
+        self.ever_alive = False  # has the ComfyUI we started answered at least once?
 
     @property
     def pid_file(self):
@@ -205,6 +206,7 @@ class ComfyProcess:
             creationflags=NO_WINDOW,
         )
         self.started_at = time.time()
+        self.ever_alive = False
         self.pid_file.write_text(str(self.proc.pid))
 
     def managed_pid(self) -> int | None:
@@ -222,7 +224,7 @@ class ComfyProcess:
 
     async def alive(self, session) -> bool:
         try:
-            async with session.get(COMFY + "/system_stats", timeout=aiohttp.ClientTimeout(total=4)) as r:
+            async with session.get(COMFY + "/system_stats", timeout=aiohttp.ClientTimeout(total=10)) as r:
                 return r.status == 200
         except Exception:
             return False
@@ -254,6 +256,7 @@ class ComfyProcess:
 
                 if await self.alive(session):
                     self.fails = 0
+                    self.ever_alive = True
                     await asyncio.sleep(5)
                     continue
 
@@ -263,9 +266,11 @@ class ComfyProcess:
                     continue
 
                 if self.proc and self.proc.poll() is None:
-                    # Still loading.
-                    if time.time() - self.started_at > 600:
-                        self.last_error = "ComfyUI took over 10 minutes to start; restarting it"
+                    # Process is alive but not answering: either still loading, or busy generating
+                    # (a long job can make it slow to answer). Never kill it once it has worked;
+                    # only give up on a start that never answered at all within 15 minutes.
+                    if not self.ever_alive and time.time() - self.started_at > 900:
+                        self.last_error = "ComfyUI took over 15 minutes to start; restarting it"
                         log.warning(self.last_error)
                         self.stop()
                     await asyncio.sleep(2)
