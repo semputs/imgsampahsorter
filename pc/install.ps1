@@ -44,11 +44,18 @@ $raw = 'https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc'
 Say "Downloading the bridge..."
 Invoke-WebRequest "$raw/bridge.py" -OutFile (Join-Path $dir 'bridge.py') -UseBasicParsing
 
+# Keep extra ComfyUI start options from an earlier install (e.g. speed settings)
+$extra = @()
+$oldPaths = Join-Path $dir 'paths.json'
+if (Test-Path $oldPaths) {
+    try { $prev = Get-Content $oldPaths -Raw | ConvertFrom-Json; if ($prev.extra_args) { $extra = @($prev.extra_args) } } catch {}
+}
 $paths = [ordered]@{
     python      = $py
     comfy_dir   = $comfy
     shared_dir  = $shared
     cuda_device = $cuda
+    extra_args  = $extra
 }
 [IO.File]::WriteAllText((Join-Path $dir 'paths.json'), ($paths | ConvertTo-Json))  # UTF-8 without BOM
 

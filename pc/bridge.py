@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.6"
+VERSION = "1.7"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -146,6 +146,11 @@ class ComfyProcess:
         return APP_DIR / "comfy.pid"
 
     def build_cmd(self) -> list[str]:
+        # Re-read settings so edits (e.g. extra_args) apply on the next ComfyUI restart.
+        fresh = load_json(APP_DIR / "paths.json", None)
+        if isinstance(fresh, dict) and fresh.get("comfy_dir"):
+            PATHS.clear()
+            PATHS.update(fresh)
         comfy_dir = Path(PATHS["comfy_dir"])
         flags = supported_flags(comfy_dir)
         cmd = [PATHS["python"], "-s", str(comfy_dir / "main.py")]
@@ -167,8 +172,13 @@ class ComfyProcess:
         add("--enable-manager")
         add("--enable-assets")
         add("--disable-auto-launch")
-        for extra in PATHS.get("extra_args", []):
-            cmd.append(extra)
+        for extra in PATHS.get("extra_args", []) or []:
+            flag = str(extra).split("=")[0]
+            if flag.startswith("--") and flag not in flags:
+                log.warning("skipping %s: this ComfyUI doesn't know it", extra)
+                continue
+            if extra not in cmd:
+                cmd.append(str(extra))
         return cmd
 
     def _pid_alive(self, pid: int) -> bool:
