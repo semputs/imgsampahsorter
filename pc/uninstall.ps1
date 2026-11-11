@@ -10,6 +10,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
 
 Remove-Item (Join-Path ([Environment]::GetFolderPath('Startup')) 'ImgSampah Bridge.vbs') -Force
 Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) 'ComfyUI (browser).url') -Force
+Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) 'ComfyUI on-off.url') -Force
 Remove-Item $dir -Recurse -Force
 
 $rule = 'ImgSampah Bridge (Tailscale only)'

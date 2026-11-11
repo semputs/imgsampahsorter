@@ -60,6 +60,8 @@ class ComfyActivity : Activity() {
     private var statusText: TextView? = null
     private var syncText: TextView? = null
     private var workflowsBox: LinearLayout? = null
+    private var powerButton: TextView? = null
+    private var comfyOn = true
 
     // Quick edit
     private var editName: String? = null
@@ -135,7 +137,7 @@ class ComfyActivity : Activity() {
         web?.visibility = if (editor) View.VISIBLE else View.INVISIBLE
         if (editor) return
         content.removeAllViews()
-        statusText = null; syncText = null; workflowsBox = null
+        statusText = null; syncText = null; workflowsBox = null; powerButton = null
         when (s) {
             Screen.SETUP -> renderSetup()
             Screen.HOME -> renderHome()
@@ -238,6 +240,9 @@ class ComfyActivity : Activity() {
                 setOnClickListener { simplePost("/api/queue", "{\"clear\":true}", "Cleared waiting jobs") }
             },
         ), lp(top = 6))
+        val power = Ui.button(this, "⏻ Stop ComfyUI", Ui.RED).apply { setOnClickListener { powerDialog() } }
+        powerButton = power
+        box.addView(row(power), lp(top = 6))
 
         box.addView(Ui.text(this, "Workflows", 20f), lp(top = 20))
         box.addView(Ui.text(this, "Tap to edit & generate.", 13f, Ui.TEXT_DIM))
@@ -248,6 +253,7 @@ class ComfyActivity : Activity() {
             Ui.button(this, "↻ Restart ComfyUI", Ui.GREY).apply { setOnClickListener { restartDialog() } },
             Ui.button(this, "Unpair", Ui.GREY).apply { setOnClickListener { unpairDialog() } },
         ), lp(top = 24))
+        updatePower()
 
         loadWorkflows()
         poll()
@@ -265,7 +271,11 @@ class ComfyActivity : Activity() {
         }) { r ->
             val t = statusText ?: return@bg
             r.onSuccess { (st, q) ->
+                comfyOn = st.optBoolean("comfy_on", true)
+                updatePower()
                 t.text = when {
+                    !comfyOn && !st.optBoolean("comfy_running") -> "⚪ ComfyUI is switched off (PC memory is free)"
+                    !comfyOn -> "⚪ Switched off, but another ComfyUI (Comfy Desktop app?) is running"
                     st.optBoolean("comfy_running") -> {
                         val run = q?.optJSONArray("queue_running")?.length() ?: 0
                         val wait = q?.optJSONArray("queue_pending")?.length() ?: 0
@@ -434,6 +444,31 @@ class ComfyActivity : Activity() {
             Intent(this, MainActivity::class.java).putExtra("browse", dir.absolutePath)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         )
+    }
+
+    private fun updatePower() {
+        val b = powerButton ?: return
+        b.text = if (comfyOn) "⏻ Stop ComfyUI (free PC memory)" else "▶ Start ComfyUI"
+        b.background = Ui.rounded(this, if (comfyOn) Ui.RED else Ui.GREEN)
+    }
+
+    private fun powerDialog() {
+        if (!comfyOn) {
+            simplePost("/isb/start", "{}", "Starting ComfyUI… takes about a minute")
+            comfyOn = true
+            updatePower()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Stop ComfyUI on the PC?")
+            .setMessage("Frees the PC's memory and graphics card. Anything running is stopped.\n\n" +
+                "It stays off (even after a PC restart) until you tap Start here, or use the " +
+                "\"ComfyUI on-off\" shortcut on the PC's desktop. Image moving to the phone keeps working.")
+            .setPositiveButton("Stop") { _, _ ->
+                simplePost("/isb/stop", "{}", "ComfyUI stopped")
+                comfyOn = false
+                updatePower()
+            }
+            .setNegativeButton("Cancel", null).show()
     }
 
     private fun restartDialog() {

@@ -70,6 +70,7 @@ Say "Set to start automatically when you log in."
 # Desktop shortcut to ComfyUI in the browser (replaces the Comfy Desktop window)
 $desk = [Environment]::GetFolderPath('Desktop')
 Set-Content -Path (Join-Path $desk 'ComfyUI (browser).url') -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8188/" -Encoding ASCII
+Set-Content -Path (Join-Path $desk 'ComfyUI on-off.url') -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8190/isb/local/pair" -Encoding ASCII
 
 # 4. Windows Firewall: allow port 8190 from Tailscale addresses only (needs one admin prompt)
 $rule = 'ImgSampah Bridge (Tailscale only)'
@@ -106,5 +107,6 @@ Say "   Code    : $($info.code)" White
 Say "=========================================`n" Green
 Say "ComfyUI takes a minute to load. On this PC, open it with the"
 Say "'ComfyUI (browser)' shortcut on your desktop (http://127.0.0.1:8188)."
-Say "Don't open the Comfy Desktop app any more - it would clash."
-Say "Show this code again any time: http://127.0.0.1:8190/isb/local/pair"
+Say "To use the Comfy Desktop app instead, switch this one off first (see below)."
+Say "To switch ComfyUI off/on (free memory, or use the Comfy Desktop app),"
+Say "use the 'ComfyUI on-off' shortcut on your desktop. It also shows this code."

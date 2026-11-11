@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.1"
+VERSION = "1.2"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -81,6 +81,7 @@ if not CFG.get("token"):
     raw = "".join(secrets.choice(alphabet) for _ in range(16))
     CFG["token"] = "-".join(raw[i:i + 4] for i in range(0, 16, 4))
 CFG.setdefault("sync_folders", [])
+CFG.setdefault("comfy_on", True)  # False = user switched ComfyUI off to free memory
 
 
 def save_cfg():
@@ -243,6 +244,14 @@ class ComfyProcess:
                     self.stop()
                     await asyncio.sleep(3)
 
+                if not CFG.get("comfy_on", True):
+                    # Switched off: make sure our ComfyUI is gone, start nothing.
+                    if self.managed_pid():
+                        self.stop()
+                    self.last_error = ""
+                    await asyncio.sleep(2)
+                    continue
+
                 if await self.alive(session):
                     self.fails = 0
                     await asyncio.sleep(5)
@@ -346,6 +355,7 @@ async def h_status(request):
         "comfy_running": alive,
         "comfy_managed": COMFY_PROC.enabled,
         "comfy_starting": bool(COMFY_PROC.proc and COMFY_PROC.proc.poll() is None and not alive),
+        "comfy_on": bool(CFG.get("comfy_on", True)),
         "last_error": COMFY_PROC.last_error,
         "output_dir": str(OUTPUT),
         "sync_folders": sync_folders(),
@@ -353,8 +363,25 @@ async def h_status(request):
 
 
 async def h_restart(request):
+    CFG["comfy_on"] = True
+    save_cfg()
     COMFY_PROC.restart_requested = True
     return web.json_response({"ok": True})
+
+
+async def h_stop(request):
+    CFG["comfy_on"] = False
+    save_cfg()
+    log.info("ComfyUI switched off")
+    await asyncio.to_thread(COMFY_PROC.stop)
+    return web.json_response({"ok": True, "comfy_on": False})
+
+
+async def h_start(request):
+    CFG["comfy_on"] = True
+    save_cfg()
+    log.info("ComfyUI switched on")
+    return web.json_response({"ok": True, "comfy_on": True})
 
 
 def _list_folders():
@@ -474,15 +501,43 @@ async def h_local_info(request):
 async def h_local_pair(request):
     ip = await asyncio.to_thread(tailscale_ip)
     html = f"""<!doctype html><meta name=viewport content="width=device-width">
-<title>ImgSampah Bridge</title>
-<body style="font-family:sans-serif;background:#121212;color:#eee;padding:24px">
-<h2>Pair your phone</h2>
-<p>In the app: <b>ComfyUI</b> &rarr; enter these.</p>
-<p>Address: <b style="font-size:1.5em">{ip or "(Tailscale not running)"}</b></p>
-<p>Pairing code: <b style="font-size:1.5em;letter-spacing:2px">{CFG['token']}</b></p>
-<p style="color:#999">Keep the code private. ComfyUI on this PC: <a style="color:#8ab4f8" href="{COMFY}">{COMFY}</a></p>
+<title>ComfyUI on/off</title>
+<body style="font-family:sans-serif;background:#121212;color:#eee;padding:24px;max-width:560px">
+<h2>ComfyUI</h2>
+<p id=st style="font-size:1.3em">Checking&hellip;</p>
+<p>
+ <button id=on onclick="act('start')" style="font-size:1.1em;padding:10px 18px;background:#43A047;color:#fff;border:0;border-radius:8px">&#9654; Start ComfyUI</button>
+ <button id=off onclick="act('stop')" style="font-size:1.1em;padding:10px 18px;background:#E53935;color:#fff;border:0;border-radius:8px">&#9211; Stop ComfyUI</button>
+</p>
+<p><a style="color:#8ab4f8" href="{COMFY}">Open ComfyUI</a> (when it's running)</p>
+<p style="color:#999">Stop it to free memory, or before opening the Comfy Desktop app.
+It stays off (even after restarting the PC) until you press Start here or in the phone app.</p>
+<hr style="border-color:#333">
+<h3>Pair your phone</h3>
+<p>Address: <b>{ip or "(Tailscale not running)"}</b><br>Code: <b style="letter-spacing:2px">{CFG['token']}</b></p>
+<script>
+async function act(a) {{ await fetch('/isb/local/' + a, {{method: 'POST'}}); setTimeout(upd, 500); }}
+async function upd() {{
+  try {{
+    const s = await (await fetch('/isb/local/state')).json();
+    let t;
+    if (!s.comfy_on) t = s.comfy_running ? '&#128992; Switched off (something else is still using port {COMFY_PORT} &ndash; the Comfy Desktop app?)' : '&#9898; Off &ndash; memory is free';
+    else if (s.comfy_running) t = '&#128994; Running';
+    else t = '&#128993; Starting&hellip; (takes a minute)';
+    document.getElementById('st').innerHTML = t;
+    document.getElementById('on').disabled = s.comfy_on;
+    document.getElementById('off').disabled = !s.comfy_on;
+  }} catch (e) {{ document.getElementById('st').textContent = 'Bridge not responding'; }}
+}}
+upd(); setInterval(upd, 3000);
+</script>
 </body>"""
     return web.Response(text=html, content_type="text/html")
+
+
+async def h_local_state(request):
+    alive = await COMFY_PROC.alive(request.app["session"])
+    return web.json_response({"comfy_on": bool(CFG.get("comfy_on", True)), "comfy_running": alive})
 
 
 # ------------------------------------------------------------------ proxy to ComfyUI
@@ -596,6 +651,11 @@ def make_app() -> web.Application:
     app = web.Application(middlewares=[guard], client_max_size=1024 ** 3)
     app.router.add_get("/isb/status", h_status)
     app.router.add_post("/isb/restart", h_restart)
+    app.router.add_post("/isb/stop", h_stop)
+    app.router.add_post("/isb/start", h_start)
+    app.router.add_post("/isb/local/stop", h_stop)
+    app.router.add_post("/isb/local/start", h_start)
+    app.router.add_get("/isb/local/state", h_local_state)
     app.router.add_get("/isb/folders", h_folders)
     app.router.add_get("/isb/config", h_get_config)
     app.router.add_post("/isb/config", h_set_config)
