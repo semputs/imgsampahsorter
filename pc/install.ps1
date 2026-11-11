@@ -50,7 +50,7 @@ $paths = [ordered]@{
     shared_dir  = $shared
     cuda_device = $cuda
 }
-$paths | ConvertTo-Json | Set-Content -Path (Join-Path $dir 'paths.json') -Encoding UTF8
+[IO.File]::WriteAllText((Join-Path $dir 'paths.json'), ($paths | ConvertTo-Json))  # UTF-8 without BOM
 
 # Hidden launcher (window style 0 = no window, no taskbar icon)
 $bridge = Join-Path $dir 'bridge.py'

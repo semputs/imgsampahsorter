@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.0"
+VERSION = "1.1"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -61,7 +61,8 @@ if os.environ.get("ISB_CONSOLE"):
 
 def load_json(path: Path, default):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: Windows PowerShell 5 writes a BOM at the start of UTF-8 files.
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return default
 
