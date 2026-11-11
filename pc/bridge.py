@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.2"
+VERSION = "1.3"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -369,6 +369,40 @@ async def h_restart(request):
     return web.json_response({"ok": True})
 
 
+RAW_BRIDGE = "https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc/bridge.py"
+
+
+async def h_update(request):
+    """Download the latest bridge from GitHub, check it compiles, swap it in and restart."""
+    me = Path(__file__).resolve()
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
+            async with s.get(RAW_BRIDGE, params={"t": str(int(time.time()))}) as r:
+                if r.status != 200:
+                    return web.json_response({"error": f"GitHub said HTTP {r.status}"}, status=502)
+                code = await r.read()
+        compile(code, "bridge.py", "exec")
+    except Exception as e:
+        return web.json_response({"error": f"download failed: {e}"}, status=502)
+    m = re.search(rb'VERSION = "([^"]+)"', code)
+    new_version = m.group(1).decode() if m else "?"
+    tmp = me.with_suffix(".new")
+    tmp.write_bytes(code)
+    os.replace(tmp, me)
+    log.info("updated bridge %s -> %s, restarting", VERSION, new_version)
+
+    async def restart_later():
+        await asyncio.sleep(1)
+        flags = NO_WINDOW | (0x00000008 if IS_WIN else 0)  # DETACHED_PROCESS
+        subprocess.Popen([sys.executable, str(me)], cwd=str(me.parent), creationflags=flags,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True)
+        os._exit(0)
+
+    asyncio.create_task(restart_later())
+    return web.json_response({"ok": True, "old": VERSION, "new": new_version})
+
+
 async def h_stop(request):
     CFG["comfy_on"] = False
     save_cfg()
@@ -466,6 +500,10 @@ async def h_ack(request):
     except OSError as e:
         return web.json_response({"error": str(e)}, status=500)
     log.info("moved to phone: %s", p.relative_to(OUTPUT).as_posix())
+    try:
+        keep_counter(p)
+    except Exception as e:
+        log.warning("counter marker failed for %s: %s", p.name, e)
     # Tidy empty sub-subfolders, but never the synced folder itself.
     top = (OUTPUT / p.relative_to(OUTPUT).parts[0]).resolve()
     d = p.parent
@@ -476,6 +514,43 @@ async def h_ack(request):
             break
         d = d.parent
     return web.json_response({"ok": True})
+
+
+COUNTER_RE = re.compile(r"^(?P<prefix>.+)_(?P<n>\d{5,})_(?:\..*)?$")
+MARKER_EXT = ".isbcounter"
+
+
+def keep_counter(moved: Path):
+    """
+    ComfyUI's SaveImage numbers files by looking at what is already in the folder
+    (prefix_00012_.png -> next is 00013). Once images move to the phone the folder is
+    empty and numbering restarts at 00001. Leave one tiny marker per prefix holding the
+    highest number, which ComfyUI counts but which isn't an image (so never synced).
+    """
+    m = COUNTER_RE.match(moved.name)
+    if not m:
+        return
+    prefix, n = m.group("prefix"), int(m.group("n"))
+    best = n
+    old_markers = []
+    for f in moved.parent.glob(glob_escape(prefix) + "_*_" + MARKER_EXT):
+        mm = COUNTER_RE.match(f.name)
+        if mm and mm.group("prefix") == prefix:
+            best = max(best, int(mm.group("n")))
+            old_markers.append(f)
+    marker = moved.parent / f"{prefix}_{best:05d}_{MARKER_EXT}"
+    if not marker.exists():
+        marker.write_bytes(b"")
+    for f in old_markers:
+        if f != marker:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+
+def glob_escape(s: str) -> str:
+    return re.sub(r"([\[\]*?])", r"[\1]", s)
 
 
 def tailscale_ip() -> str:
@@ -652,6 +727,7 @@ def make_app() -> web.Application:
     app.router.add_get("/isb/status", h_status)
     app.router.add_post("/isb/restart", h_restart)
     app.router.add_post("/isb/stop", h_stop)
+    app.router.add_post("/isb/update", h_update)
     app.router.add_post("/isb/start", h_start)
     app.router.add_post("/isb/local/stop", h_stop)
     app.router.add_post("/isb/local/start", h_start)
@@ -674,13 +750,17 @@ async def main():
     runner = web.AppRunner(make_app(), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT, reuse_address=False)
-    try:
-        await site.start()
-    except OSError as e:
-        log.error("port %s busy (already running?): %s", PORT, e)
-        print(f"Port {PORT} is busy - is the bridge already running?", file=sys.stderr)
-        await runner.cleanup()
-        return
+    for attempt in range(15):
+        try:
+            await site.start()
+            break
+        except OSError as e:
+            if attempt == 14:
+                log.error("port %s busy (already running?): %s", PORT, e)
+                print(f"Port {PORT} is busy - is the bridge already running?", file=sys.stderr)
+                await runner.cleanup()
+                return
+            await asyncio.sleep(1)
     log.info("bridge %s listening on :%s, output=%s, sync=%s", VERSION, PORT, OUTPUT, sync_folders())
     while True:
         await asyncio.sleep(3600)

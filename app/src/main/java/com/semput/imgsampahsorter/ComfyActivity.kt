@@ -252,8 +252,11 @@ class ComfyActivity : Activity() {
 
         box.addView(row(
             Ui.button(this, "↻ Restart ComfyUI", Ui.GREY).apply { setOnClickListener { restartDialog() } },
-            Ui.button(this, "Unpair", Ui.GREY).apply { setOnClickListener { unpairDialog() } },
+            Ui.button(this, "⬆ Update PC helper", Ui.GREY).apply { setOnClickListener { updateHelper() } },
         ), lp(top = 24))
+        box.addView(row(
+            Ui.button(this, "Unpair", Ui.GREY).apply { setOnClickListener { unpairDialog() } },
+        ), lp(top = 6))
         updatePower()
 
         loadWorkflows()
@@ -516,6 +519,23 @@ class ComfyActivity : Activity() {
                 simplePost("/isb/stop", "{}", "ComfyUI stopped")
                 comfyOn = false
                 updatePower()
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun updateHelper() {
+        AlertDialog.Builder(this).setTitle("Update the PC helper?")
+            .setMessage("Downloads the latest helper from GitHub onto the PC and restarts it. " +
+                "ComfyUI keeps running; the connection drops for a few seconds.")
+            .setPositiveButton("Update") { _, _ ->
+                ComfyApi.bg({ JSONObject(ComfyApi.post(this, "/isb/update", "{}")) }) { r ->
+                    r.onSuccess { toast("PC helper updated: ${it.optString("old")} → ${it.optString("new")}") }
+                        .onFailure {
+                            toast(if ((it as? ComfyApi.HttpError)?.code == 404)
+                                "This PC helper is too old to update itself. Run the setup line on the PC once."
+                            else ComfyApi.explain(it))
+                        }
+                }
             }
             .setNegativeButton("Cancel", null).show()
     }
