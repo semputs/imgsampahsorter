@@ -13,6 +13,7 @@ Android app for sorting a folder of images fast with swipes.
 - **Trash (N)** button at the top: delete everything in trash forever (asks to confirm), or restore all.
 - Trash is kept until you empty it with the Trash button. Leaving the app closes the image viewer, and the recent-apps thumbnail stays blank.
 - Pinch or double-tap to zoom; drag to look around while zoomed.
+- Long-press an image made by ComfyUI → "Make new workflow from this image" (reads the workflow saved inside the PNG).
 - Remembers where you were in each folder, and asks on opening whether to continue or start from 1.
 - Tap the counter at the top (e.g. "12 / 300") to jump to any image number.
 

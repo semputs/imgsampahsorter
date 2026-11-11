@@ -92,7 +92,7 @@ class SorterActivity : Activity() {
         super.onStop()
         // Left the app (home, app switch, screen off): close the image viewer so no picture is
         // left on screen. The position is saved in onPause, so "Continue" picks up from here.
-        if (!isChangingConfigurations) finish()
+        if (!isChangingConfigurations && !openingOwnScreen) finish()
     }
 
     override fun onDestroy() {
@@ -427,7 +427,85 @@ class SorterActivity : Activity() {
                 if (zoomed()) animateZoomTo(1f, e.x, e.y) else animateZoomTo(2.5f, e.x, e.y)
                 return true
             }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (busy || images.isEmpty() || scaleDetector.isInProgress) return
+                longPressed = true
+                springBack()
+                root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                imageMenu()
+            }
         })
+    }
+
+    /** Set when a long press opened the menu, so lifting the finger doesn't also swipe. */
+    private var longPressed = false
+
+    /** True while we open one of our own screens, so onStop doesn't close the viewer. */
+    private var openingOwnScreen = false
+
+    override fun onResume() {
+        super.onResume()
+        openingOwnScreen = false
+    }
+
+    private fun imageMenu() {
+        val f = images.getOrNull(index) ?: return
+        AlertDialog.Builder(this)
+            .setTitle(f.name)
+            .setItems(arrayOf("Make new workflow from this image", "Cancel")) { _, which ->
+                if (which == 0) makeWorkflowFrom(f)
+            }
+            .show()
+    }
+
+    private fun makeWorkflowFrom(f: File) {
+        ComfyApi.bg({ PngMeta.readText(f) }) { r ->
+            val meta = r.getOrNull() ?: emptyMap()
+            val wfText = meta["workflow"]
+            val wf = wfText?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+            if (wf == null) {
+                AlertDialog.Builder(this).setTitle("No workflow in this image")
+                    .setMessage(
+                        if (meta.containsKey("prompt")) "This image only has the run settings, not the editable workflow."
+                        else "Only PNG images made by appgentic5 have their workflow saved inside."
+                    )
+                    .setPositiveButton("OK", null).show()
+                return@bg
+            }
+            if (!ComfyApi.isPaired(this)) {
+                toast("Connect to appgentic5 first (🎨 button on the folder screen)")
+                return@bg
+            }
+            val input = EditText(this).apply {
+                setText("from " + f.nameWithoutExtension.trimEnd('_'))
+                isSingleLine = true
+                selectAll()
+            }
+            AlertDialog.Builder(this).setTitle("New workflow name")
+                .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input) })
+                .setPositiveButton("Save") { _, _ ->
+                    var name = input.text.toString().trim().replace("\\", "/").trim('/')
+                    if (name.isEmpty() || name.split('/').any { it == ".." || it == "." }) return@setPositiveButton
+                    if (!name.endsWith(".json")) name += ".json"
+                    wf.put("id", java.util.UUID.randomUUID().toString())
+                    val url = "/api/userdata/" + ComfyApi.enc("workflows/$name") + "?overwrite=false"
+                    ComfyApi.bg({ ComfyApi.post(this, url, wf.toString()) }) { rr ->
+                        rr.onSuccess {
+                            AlertDialog.Builder(this).setTitle("Workflow saved")
+                                .setMessage("\"${name.removeSuffix(".json")}\" is now in your workflows.")
+                                .setPositiveButton("Open & edit") { _, _ ->
+                                    openingOwnScreen = true
+                                    startActivity(android.content.Intent(this, ComfyActivity::class.java).putExtra("openWorkflow", name))
+                                }
+                                .setNegativeButton("OK", null).show()
+                        }.onFailure {
+                            toast(if ((it as? ComfyApi.HttpError)?.code == 409) "That name already exists" else ComfyApi.explain(it))
+                        }
+                    }
+                }
+                .setNegativeButton("Cancel", null).show()
+        }
     }
 
     private fun onTouch(e: MotionEvent) {
@@ -443,6 +521,16 @@ class SorterActivity : Activity() {
     }
 
     private fun handleTouch(e: MotionEvent) {
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+            longPressed = false
+        } else if (longPressed) {
+            // The long-press menu is open: ignore the rest of this touch.
+            if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
+                tracker?.recycle(); tracker = null
+                axis = 0
+            }
+            return
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 imageView.animate().cancel()

@@ -108,6 +108,8 @@ class ComfyActivity : Activity() {
         if (ComfyApi.isPaired(this)) {
             setupWeb()
             show(Screen.HOME)
+            // Opened from the image viewer's "Make new workflow from this image".
+            intent.getStringExtra("openWorkflow")?.let { openEdit(it) }
         } else {
             show(Screen.SETUP)
         }
