@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.3"
+VERSION = "1.4"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -372,6 +372,20 @@ async def h_restart(request):
 RAW_BRIDGE = "https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc/bridge.py"
 
 
+def relaunch():
+    """Start a fresh, hidden copy of the bridge (same way as at login: no window)."""
+    me = Path(__file__).resolve()
+    vbs = APP_DIR / "start-hidden.vbs"
+    if IS_WIN and vbs.exists():
+        # wscript is a windowless program; the .vbs starts Python with window style 0 (hidden).
+        subprocess.Popen(["wscript.exe", str(vbs)], creationflags=NO_WINDOW, close_fds=True)
+        return
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    exe = str(pyw) if IS_WIN and pyw.exists() else sys.executable
+    subprocess.Popen([exe, str(me)], cwd=str(me.parent), creationflags=NO_WINDOW,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+
+
 async def h_update(request):
     """Download the latest bridge from GitHub, check it compiles, swap it in and restart."""
     me = Path(__file__).resolve()
@@ -393,10 +407,7 @@ async def h_update(request):
 
     async def restart_later():
         await asyncio.sleep(1)
-        flags = NO_WINDOW | (0x00000008 if IS_WIN else 0)  # DETACHED_PROCESS
-        subprocess.Popen([sys.executable, str(me)], cwd=str(me.parent), creationflags=flags,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         close_fds=True)
+        relaunch()
         os._exit(0)
 
     asyncio.create_task(restart_later())
