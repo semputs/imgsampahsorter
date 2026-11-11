@@ -959,21 +959,33 @@ class ComfyActivity : Activity() {
                     val wf = item.optJSONArray("prompt")?.optJSONObject(3)
                         ?.optJSONObject("extra_pnginfo")?.optJSONObject("workflow") ?: continue
                     var ts = 0L
+                    var endTs = 0L
                     val msgs = item.optJSONObject("status")?.optJSONArray("messages")
                     if (msgs != null) for (i in 0 until msgs.length()) {
                         val m = msgs.optJSONArray(i) ?: continue
-                        if (m.optString(0) == "execution_start") ts = m.optJSONObject(1)?.optLong("timestamp") ?: 0L
+                        val t = m.optJSONObject(1)?.optLong("timestamp") ?: 0L
+                        when (m.optString(0)) {
+                            "execution_start" -> ts = t
+                            "execution_success", "execution_error", "execution_interrupted" -> endTs = t
+                        }
                     }
                     var firstImage = ""
+                    var imageCount = 0
                     item.optJSONObject("outputs")?.let { outs ->
                         for (k in outs.keys()) {
-                            val img = outs.optJSONObject(k)?.optJSONArray("images")?.optJSONObject(0) ?: continue
-                            firstImage = listOf(img.optString("subfolder"), img.optString("filename")).filter { it.isNotEmpty() }.joinToString("/")
-                            break
+                            val imgs = outs.optJSONObject(k)?.optJSONArray("images") ?: continue
+                            if (imgs.length() == 0) continue
+                            imageCount += imgs.length()
+                            if (firstImage.isEmpty()) {
+                                val img = imgs.optJSONObject(0) ?: continue
+                                firstImage = listOf(img.optString("subfolder"), img.optString("filename")).filter { it.isNotEmpty() }.joinToString("/")
+                            }
                         }
                     }
                     val ok = item.optJSONObject("status")?.optString("status_str") == "success"
-                    val label = (if (ts > 0) fmt.format(Date(ts)) else id.take(8)) +
+                    val took = if (ts > 0 && endTs >= ts) "  ·  took " + fmtSecs((endTs - ts) / 1000.0) else ""
+                    val count = if (imageCount > 1) "  ·  $imageCount images" else ""
+                    val label = (if (ts > 0) fmt.format(Date(ts)) else id.take(8)) + took + count +
                         (if (ok) "" else "  ⚠") + "\n" + firstImage.ifEmpty { "(no image)" }
                     box.addView(TextView(this).apply {
                         text = label
