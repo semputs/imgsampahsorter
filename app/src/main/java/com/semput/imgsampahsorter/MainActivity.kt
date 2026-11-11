@@ -206,7 +206,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         titleRow.addView(Ui.text(this, "Pick a folder to sort", 22f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        titleRow.addView(Ui.button(this, "🎨 ComfyUI", Ui.BLUE).apply {
+        titleRow.addView(Ui.button(this, "🎨 appgentic5", Ui.BLUE).apply {
             textSize = 14f
             setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 8))
             setOnClickListener { startActivity(Intent(this@MainActivity, ComfyActivity::class.java)) }

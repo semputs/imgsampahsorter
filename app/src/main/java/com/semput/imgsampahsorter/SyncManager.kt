@@ -7,7 +7,7 @@ import java.io.File
 
 /**
  * While the app is open, keeps pulling finished images from the PC's chosen output
- * folders into Pictures/ComfyUI/<folder>/ on the phone. The PC deletes its copy only
+ * folders into Pictures/appgentic5/<folder>/ on the phone. The PC deletes its copy only
  * after the phone confirms it has the whole file.
  */
 object SyncManager {

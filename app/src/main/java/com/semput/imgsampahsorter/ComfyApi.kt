@@ -10,7 +10,7 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.Executors
 
-/** Talks to the ImgSampah Bridge on the PC (which passes ComfyUI's own API through). */
+/** Talks to the ImgSampah Bridge on the PC (which passes appgentic5's own API through). */
 object ComfyApi {
     const val PORT = 8190
 
@@ -116,7 +116,7 @@ object ComfyApi {
         is HttpError -> when (e.code) {
             401 -> "Wrong pairing code."
             403 -> "The PC refused the connection. Is Tailscale on, on both phone and PC?"
-            503 -> "ComfyUI is still starting on the PC…"
+            503 -> "appgentic5 is still starting on the PC…"
             else -> "PC said: HTTP ${e.code} ${e.body.take(150)}"
         }
         is java.net.SocketTimeoutException, is java.net.ConnectException, is java.net.NoRouteToHostException ->

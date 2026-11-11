@@ -42,8 +42,8 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * ComfyUI remote: pairing, workflow list (duplicate / rename / delete), quick edit + generate,
- * the full ComfyUI editor in a WebView, recent runs, queue controls and image hand-off settings.
+ * appgentic5 remote: pairing, workflow list (duplicate / rename / delete), quick edit + generate,
+ * the full appgentic5 editor in a WebView, recent runs, queue controls and image hand-off settings.
  */
 class ComfyActivity : Activity() {
 
@@ -216,7 +216,7 @@ class ComfyActivity : Activity() {
         scroll.addView(box)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        box.addView(Ui.text(this, "ComfyUI", 24f))
+        box.addView(Ui.text(this, "appgentic5", 24f))
         statusText = Ui.text(this, "Connecting…", 14f, Ui.TEXT_DIM)
         box.addView(statusText, lp(top = 4))
         val pb = LinearLayout(this).apply {
@@ -260,7 +260,7 @@ class ComfyActivity : Activity() {
                 setOnClickListener { simplePost("/api/queue", "{\"clear\":true}", "Cleared waiting jobs") }
             },
         ), lp(top = 6))
-        val power = Ui.button(this, "⏻ Stop ComfyUI", Ui.RED).apply { setOnClickListener { powerDialog() } }
+        val power = Ui.button(this, "⏻ Stop appgentic5", Ui.RED).apply { setOnClickListener { powerDialog() } }
         powerButton = power
         box.addView(row(power), lp(top = 6))
 
@@ -270,7 +270,7 @@ class ComfyActivity : Activity() {
         box.addView(workflowsBox, lp(top = 6))
 
         box.addView(row(
-            Ui.button(this, "↻ Restart ComfyUI", Ui.GREY).apply { setOnClickListener { restartDialog() } },
+            Ui.button(this, "↻ Restart appgentic5", Ui.GREY).apply { setOnClickListener { restartDialog() } },
             Ui.button(this, "⬆ Update PC helper", Ui.GREY).apply { setOnClickListener { updateHelper() } },
         ), lp(top = 24))
         box.addView(row(
@@ -303,15 +303,15 @@ class ComfyActivity : Activity() {
                 comfyOn = st.optBoolean("comfy_on", true)
                 updatePower()
                 t.text = when {
-                    !comfyOn && !st.optBoolean("comfy_running") -> "⚪ ComfyUI is switched off (PC memory is free)"
-                    !comfyOn -> "⚪ Switched off, but another ComfyUI (Comfy Desktop app?) is running"
+                    !comfyOn && !st.optBoolean("comfy_running") -> "⚪ appgentic5 is switched off (PC memory is free)"
+                    !comfyOn -> "⚪ Switched off, but another appgentic5 (desktop app?) is running"
                     st.optBoolean("comfy_running") -> {
                         val run = q?.optJSONArray("queue_running")?.length() ?: 0
                         val wait = q?.optJSONArray("queue_pending")?.length() ?: 0
-                        "🟢 ComfyUI ready · " + if (run + wait == 0) "idle" else "running $run, waiting $wait"
+                        "🟢 appgentic5 ready · " + if (run + wait == 0) "idle" else "running $run, waiting $wait"
                     }
-                    st.optBoolean("comfy_starting") -> "🟡 ComfyUI is starting on the PC…"
-                    else -> "🔴 ComfyUI not running. " + st.optString("last_error")
+                    st.optBoolean("comfy_starting") -> "🟡 appgentic5 is starting on the PC…"
+                    else -> "🔴 appgentic5 not running. " + st.optString("last_error")
                 }
                 t.setTextColor(Ui.TEXT)
             }.onFailure {
@@ -343,7 +343,7 @@ class ComfyActivity : Activity() {
         if (p == null) { box.visibility = View.GONE; return false }
         box.visibility = View.VISIBLE
         if (p.optBoolean("missing")) {
-            txt.text = "Live progress needs one ComfyUI restart (tap ↻ Restart ComfyUI below)."
+            txt.text = "Live progress needs one appgentic5 restart (tap ↻ Restart appgentic5 below)."
             txt.setTextColor(Ui.TEXT_DIM)
             bar.visibility = View.GONE
             return true
@@ -402,7 +402,7 @@ class ComfyActivity : Activity() {
             if (workflowsBox !== box) return@bg
             box.removeAllViews()
             r.onSuccess { list ->
-                if (list.isEmpty()) box.addView(Ui.text(this, "No saved workflows yet. Save one in ComfyUI first.", 14f, Ui.TEXT_DIM))
+                if (list.isEmpty()) box.addView(Ui.text(this, "No saved workflows yet. Save one in appgentic5 first.", 14f, Ui.TEXT_DIM))
                 list.forEach { box.addView(workflowRow(it), lp(top = 6)) }
             }.onFailure {
                 box.addView(Ui.text(this, ComfyApi.explain(it), 14f, Ui.RED))
@@ -578,23 +578,23 @@ class ComfyActivity : Activity() {
 
     private fun updatePower() {
         val b = powerButton ?: return
-        b.text = if (comfyOn) "⏻ Stop ComfyUI (free PC memory)" else "▶ Start ComfyUI"
+        b.text = if (comfyOn) "⏻ Stop appgentic5 (free PC memory)" else "▶ Start appgentic5"
         b.background = Ui.rounded(this, if (comfyOn) Ui.RED else Ui.GREEN)
     }
 
     private fun powerDialog() {
         if (!comfyOn) {
-            simplePost("/isb/start", "{}", "Starting ComfyUI… takes about a minute")
+            simplePost("/isb/start", "{}", "Starting appgentic5… takes about a minute")
             comfyOn = true
             updatePower()
             return
         }
-        AlertDialog.Builder(this).setTitle("Stop ComfyUI on the PC?")
+        AlertDialog.Builder(this).setTitle("Stop appgentic5 on the PC?")
             .setMessage("Frees the PC's memory and graphics card. Anything running is stopped.\n\n" +
                 "It stays off (even after a PC restart) until you tap Start here, or use the " +
-                "\"ComfyUI on-off\" shortcut on the PC's desktop. Image moving to the phone keeps working.")
+                "\"on-off\" shortcut on the PC's desktop. Image moving to the phone keeps working.")
             .setPositiveButton("Stop") { _, _ ->
-                simplePost("/isb/stop", "{}", "ComfyUI stopped")
+                simplePost("/isb/stop", "{}", "appgentic5 stopped")
                 comfyOn = false
                 updatePower()
             }
@@ -604,7 +604,7 @@ class ComfyActivity : Activity() {
     private fun updateHelper() {
         AlertDialog.Builder(this).setTitle("Update the PC helper?")
             .setMessage("Downloads the latest helper from GitHub onto the PC and restarts it. " +
-                "ComfyUI keeps running; the connection drops for a few seconds.")
+                "appgentic5 keeps running; the connection drops for a few seconds.")
             .setPositiveButton("Update") { _, _ ->
                 ComfyApi.bg({ JSONObject(ComfyApi.post(this, "/isb/update", "{}")) }) { r ->
                     r.onSuccess { toast("PC helper updated: ${it.optString("old")} → ${it.optString("new")}") }
@@ -619,9 +619,9 @@ class ComfyActivity : Activity() {
     }
 
     private fun restartDialog() {
-        AlertDialog.Builder(this).setTitle("Restart ComfyUI on the PC?")
+        AlertDialog.Builder(this).setTitle("Restart appgentic5 on the PC?")
             .setMessage("Anything running now is stopped. It takes about a minute to come back.")
-            .setPositiveButton("Restart") { _, _ -> simplePost("/isb/restart", "{}", "Restarting ComfyUI…") }
+            .setPositiveButton("Restart") { _, _ -> simplePost("/isb/restart", "{}", "Restarting appgentic5…") }
             .setNegativeButton("Cancel", null).show()
     }
 
@@ -885,7 +885,7 @@ class ComfyActivity : Activity() {
                 if (!isControl) continue
                 val cur = values.opt(i - 1) as? Number ?: continue
                 val next = when (ctrl) {
-                    "randomize" -> (rng.nextLong() and 0x3FFFFFFFFFFFFL)  // up to 2^50, like ComfyUI
+                    "randomize" -> (rng.nextLong() and 0x3FFFFFFFFFFFFL)  // up to 2^50, like appgentic5
                     "increment" -> cur.toLong() + 1
                     "decrement" -> (cur.toLong() - 1).coerceAtLeast(0)
                     else -> continue
@@ -903,7 +903,7 @@ class ComfyActivity : Activity() {
         btn.isEnabled = false
         btn.text = "Sending…"
         // Apply each seed's "control after generate" (randomize / increment / decrement) now, so every
-        // Generate is a new job. Otherwise ComfyUI sees the same seed and just returns the cached images.
+        // Generate is a new job. Otherwise appgentic5 sees the same seed and just returns the cached images.
         if (bumpSeeds(wf)) editDirty = true
         saveEdit {
             runInEditor(wf, name, batch) { msg ->
@@ -1079,7 +1079,7 @@ class ComfyActivity : Activity() {
         if (wf != null) runInEditor(wf, name, 0) { msg -> if (msg.startsWith("error")) toast(msg) }
     }
 
-    /** Load [wf] into the ComfyUI page and (if [queue] > 0) queue it [queue] times. */
+    /** Load [wf] into the appgentic5 page and (if [queue] > 0) queue it [queue] times. */
     private fun runInEditor(wf: JSONObject, name: String?, queue: Int, cb: (String) -> Unit) {
         setupWeb()
         val w = web ?: return cb("error: not connected")
@@ -1097,14 +1097,14 @@ class ComfyActivity : Activity() {
                   if (app && app.graph && app.canvas) break;
                   await new Promise(r => setTimeout(r, 500));
                 }
-                if (!app || !app.graph) { done('error: The ComfyUI page did not finish loading. Is ComfyUI running on the PC?'); return; }
+                if (!app || !app.graph) { done('error: The appgentic5 page did not finish loading. Is appgentic5 running on the PC?'); return; }
                 const wf = $wf;
                 try { await app.loadGraphData(wf, true, true, $nameJs); }
                 catch (e) { await app.loadGraphData(wf, true, true, null); }
                 if ($queue > 0) {
                   await new Promise(r => setTimeout(r, 400));
                   const ok = await app.queuePrompt(0, $queue);
-                  done(ok === false ? 'error: ComfyUI refused the job. Open the full editor to see the red error.' : 'queued');
+                  done(ok === false ? 'error: appgentic5 refused the job. Open the full editor to see the red error.' : 'queued');
                 } else done('loaded');
               } catch (e) { done('error: ' + (e && e.message ? e.message : e)); }
               finally { window.__isbBusy = false; }
@@ -1117,7 +1117,7 @@ class ComfyActivity : Activity() {
             if (pendingCb === cb) {
                 pendingJs = null
                 pendingCb = null
-                cb("error: Timed out waiting for ComfyUI. Is it still starting on the PC?")
+                cb("error: Timed out waiting for appgentic5. Is it still starting on the PC?")
             }
         }, 120_000)
     }
