@@ -464,12 +464,10 @@ class SorterActivity : Activity() {
             val meta = r.getOrNull() ?: emptyMap()
             val wfText = meta["workflow"]
             val wf = wfText?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
-            if (wf == null) {
+            val apiPrompt = meta["prompt"]?.takeIf { runCatching { org.json.JSONObject(it) }.isSuccess }
+            if (wf == null && apiPrompt == null) {
                 AlertDialog.Builder(this).setTitle("No workflow in this image")
-                    .setMessage(
-                        if (meta.containsKey("prompt")) "This image only has the run settings, not the editable workflow."
-                        else "Only PNG images made by appgentic5 have their workflow saved inside."
-                    )
+                    .setMessage("Only PNG images made by appgentic5 have their workflow saved inside.")
                     .setPositiveButton("OK", null).show()
                 return@bg
             }
@@ -488,6 +486,13 @@ class SorterActivity : Activity() {
                     var name = input.text.toString().trim().replace("\\", "/").trim('/')
                     if (name.isEmpty() || name.split('/').any { it == ".." || it == "." }) return@setPositiveButton
                     if (!name.endsWith(".json")) name += ".json"
+                    if (wf == null) {
+                        // Only run settings saved (e.g. made by Hermes): let appgentic5 rebuild the workflow.
+                        openingOwnScreen = true
+                        startActivity(android.content.Intent(this, ComfyActivity::class.java)
+                            .putExtra("apiPrompt", apiPrompt).putExtra("newName", name))
+                        return@setPositiveButton
+                    }
                     wf.put("id", java.util.UUID.randomUUID().toString())
                     val url = "/api/userdata/" + ComfyApi.enc("workflows/$name") + "?overwrite=false"
                     ComfyApi.bg({ ComfyApi.post(this, url, wf.toString()) }) { rr ->

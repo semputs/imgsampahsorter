@@ -110,6 +110,9 @@ class ComfyActivity : Activity() {
             show(Screen.HOME)
             // Opened from the image viewer's "Make new workflow from this image".
             intent.getStringExtra("openWorkflow")?.let { openEdit(it) }
+            val api = intent.getStringExtra("apiPrompt")
+            val apiName = intent.getStringExtra("newName")
+            if (api != null && apiName != null) importApiPrompt(api, apiName)
         } else {
             show(Screen.SETUP)
         }
@@ -1122,6 +1125,56 @@ class ComfyActivity : Activity() {
                 pendingCb = null
                 cb("error: Timed out waiting for appgentic5. Is it still starting on the PC?")
             }
+        }, 120_000)
+    }
+
+    /**
+     * Images made by programs (e.g. Hermes) only store the run settings ("prompt"), not the editable
+     * workflow. ComfyUI's own page can rebuild a workflow from them; do that, then save it.
+     */
+    private fun importApiPrompt(apiJson: String, name: String) {
+        val prompt = runCatching { JSONObject(apiJson) }.getOrNull() ?: return toast("Couldn't read the image's settings")
+        toast("Rebuilding workflow…")
+        setupWeb()
+        val w = web ?: return
+        val cb: (String) -> Unit = { msg ->
+            if (!msg.startsWith("json:")) {
+                AlertDialog.Builder(this).setTitle("Couldn't rebuild the workflow")
+                    .setMessage(msg.removePrefix("error: ")).setPositiveButton("OK", null).show()
+            } else {
+                val wf = JSONObject(msg.removePrefix("json:")).put("id", UUID.randomUUID().toString())
+                ComfyApi.bg({ ComfyApi.post(this, wfUrl(name) + "?overwrite=false", wf.toString()) }) { r ->
+                    r.onSuccess { toast("Workflow saved"); loadWorkflows(); openEdit(name) }
+                        .onFailure { toast(if ((it as? ComfyApi.HttpError)?.code == 409) "That name already exists" else ComfyApi.explain(it)) }
+                }
+            }
+        }
+        pendingCb?.invoke("error: replaced by a newer request")
+        pendingCb = cb
+        val js = """
+            (async () => {
+              const done = (m) => { try { IsbBridge.done(String(m)); } catch (e) {} };
+              if (window.__isbBusy) return; window.__isbBusy = true;
+              try {
+                let app = null;
+                for (let i = 0; i < 180; i++) {
+                  app = (window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app) || window.app;
+                  if (app && app.graph && app.canvas) break;
+                  await new Promise(r => setTimeout(r, 500));
+                }
+                if (!app || !app.graph) { done('error: The appgentic5 page did not finish loading.'); return; }
+                await app.loadApiJson($prompt, ${JSONObject.quote(name.removeSuffix(".json"))});
+                await new Promise(r => setTimeout(r, 300));
+                done('json:' + JSON.stringify(app.graph.serialize()));
+              } catch (e) { done('error: ' + (e && e.message ? e.message : e)); }
+              finally { window.__isbBusy = false; }
+            })();
+        """.trimIndent()
+        pendingJs = js
+        if (w.url == null) w.loadUrl(ComfyApi.base(this) + "/", mapOf("X-ISB-Token" to ComfyApi.code(this)))
+        else w.evaluateJavascript(js, null)
+        main.postDelayed({
+            if (pendingCb === cb) { pendingJs = null; pendingCb = null; cb("error: Timed out waiting for appgentic5.") }
         }, 120_000)
     }
 
