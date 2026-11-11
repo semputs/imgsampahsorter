@@ -868,11 +868,43 @@ class ComfyActivity : Activity() {
         }
     }
 
+    private val rng = java.util.Random()
+
+    /** Returns true if any seed value changed. */
+    private fun bumpSeeds(wf: JSONObject): Boolean {
+        var changed = false
+        val nodes = wf.optJSONArray("nodes") ?: return false
+        for (n in 0 until nodes.length()) {
+            val node = nodes.optJSONObject(n) ?: continue
+            if (node.optInt("mode") == 2 || node.optInt("mode") == 4) continue
+            val values = node.optJSONArray("widgets_values") ?: continue
+            val slots = slotsFor(nodeInfo[node.optString("type")])?.takeIf { it.size == values.length() }
+            for (i in 1 until values.length()) {
+                val ctrl = values.opt(i) as? String ?: continue
+                val isControl = slots?.get(i)?.control ?: (ctrl in controlValues)
+                if (!isControl) continue
+                val cur = values.opt(i - 1) as? Number ?: continue
+                val next = when (ctrl) {
+                    "randomize" -> (rng.nextLong() and 0x3FFFFFFFFFFFFL)  // up to 2^50, like ComfyUI
+                    "increment" -> cur.toLong() + 1
+                    "decrement" -> (cur.toLong() - 1).coerceAtLeast(0)
+                    else -> continue
+                }
+                values.put(i - 1, next)
+                changed = true
+            }
+        }
+        return changed
+    }
+
     private fun generate(btn: TextView) {
         val name = editName ?: return
         val wf = editWf ?: return
         btn.isEnabled = false
         btn.text = "Sending…"
+        // Apply each seed's "control after generate" (randomize / increment / decrement) now, so every
+        // Generate is a new job. Otherwise ComfyUI sees the same seed and just returns the cached images.
+        if (bumpSeeds(wf)) editDirty = true
         saveEdit {
             runInEditor(wf, name, batch) { msg ->
                 btn.isEnabled = true
