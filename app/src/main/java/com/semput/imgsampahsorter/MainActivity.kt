@@ -38,12 +38,23 @@ class MainActivity : Activity() {
             setPadding(p, p, p, p)
         }
         setContentView(root)
-        current = prefs.getString("browse", null)?.let { File(it) }?.takeIf { it.isDirectory }
+        current = intent.getStringExtra("browse")?.let { File(it) }?.takeIf { it.isDirectory }
+            ?: prefs.getString("browse", null)?.let { File(it) }?.takeIf { it.isDirectory }
             ?: Environment.getExternalStorageDirectory()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra("browse")?.let { File(it) }?.takeIf { it.isDirectory }?.let {
+            mergeStep = 0
+            selected.clear()
+            go(it)
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        if (hasAccess()) SyncManager.start(this)
         render()
     }
 
@@ -190,7 +201,17 @@ class MainActivity : Activity() {
     }
 
     private fun renderSortHeader(dir: File?) {
-        root.addView(Ui.text(this, "Pick a folder to sort", 24f))
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleRow.addView(Ui.text(this, "Pick a folder to sort", 22f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(Ui.button(this, "🎨 ComfyUI", Ui.BLUE).apply {
+            textSize = 14f
+            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 8))
+            setOnClickListener { startActivity(Intent(this@MainActivity, ComfyActivity::class.java)) }
+        })
+        root.addView(titleRow)
 
         val last = prefs.getString("lastSorted", null)?.let { File(it) }?.takeIf { it.isDirectory }
         if (last != null) {

@@ -1,0 +1,78 @@
+package com.semput.imgsampahsorter
+
+import android.content.Context
+import android.os.Environment
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * While the app is open, keeps pulling finished images from the PC's chosen output
+ * folders into Pictures/ComfyUI/<folder>/ on the phone. The PC deletes its copy only
+ * after the phone confirms it has the whole file.
+ */
+object SyncManager {
+    @Volatile var downloaded = 0; private set
+    @Volatile var waitingOnPc = 0; private set
+    @Volatile var lastError: String? = null; private set
+    @Volatile var lastFile: String? = null; private set
+    @Volatile private var thread: Thread? = null
+
+    fun phoneRoot(): File = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ComfyUI")
+
+    fun start(ctx: Context) {
+        if (!ComfyApi.isPaired(ctx)) return
+        if (thread?.isAlive == true) return
+        val app = ctx.applicationContext
+        thread = Thread({ loop(app) }, "comfy-sync").apply { isDaemon = true; start() }
+    }
+
+    private fun loop(ctx: Context) {
+        var idleMs = 4000L
+        while (ComfyApi.isPaired(ctx)) {
+            val worked = try {
+                val n = cycle(ctx)
+                lastError = null
+                idleMs = 4000L
+                n > 0
+            } catch (e: Throwable) {
+                lastError = ComfyApi.explain(e)
+                idleMs = (idleMs * 2).coerceAtMost(30000L)
+                false
+            }
+            try { Thread.sleep(if (worked) 200 else idleMs) } catch (_: InterruptedException) { return }
+        }
+        thread = null
+    }
+
+    /** Moves up to a batch of files. Returns how many were moved. */
+    private fun cycle(ctx: Context): Int {
+        val res = JSONObject(ComfyApi.get(ctx, "/isb/pending"))
+        val files = res.getJSONArray("files")
+        waitingOnPc = res.optInt("total", files.length())
+        var moved = 0
+        val root = phoneRoot()
+        for (i in 0 until minOf(files.length(), 20)) {
+            val f = files.getJSONObject(i)
+            val rel = f.getString("path")
+            val size = f.getLong("size")
+            if (rel.split('/').any { it == ".." || it.isEmpty() }) continue
+            var dest = File(root, rel)
+            val alreadyHave = dest.exists() && dest.length() == size
+            if (!alreadyHave) {
+                if (dest.exists()) dest = FileOps.uniqueTarget(dest.parentFile!!, dest.name)
+                val n = ComfyApi.download(ctx, "/isb/file?path=" + ComfyApi.enc(rel), dest)
+                if (n != size) {
+                    dest.delete()
+                    throw java.io.IOException("Incomplete download of ${dest.name}")
+                }
+                FileOps.scan(ctx, listOf(dest))
+            }
+            ComfyApi.post(ctx, "/isb/ack", JSONObject().put("path", rel).put("size", size).toString())
+            downloaded++
+            moved++
+            waitingOnPc = (waitingOnPc - 1).coerceAtLeast(0)
+            lastFile = rel
+        }
+        return moved
+    }
+}
