@@ -35,6 +35,7 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -407,27 +408,75 @@ class ComfyActivity : Activity() {
             }.show()
     }
 
+    private fun shortPath(f: File) = f.absolutePath.replace(android.os.Environment.getExternalStorageDirectory().absolutePath, "Phone")
+
     private fun foldersDialog() {
         ComfyApi.bg({ JSONArray(ComfyApi.get(this, "/isb/folders")) }) { r ->
             r.onFailure { toast(ComfyApi.explain(it)) }
             r.onSuccess { arr ->
                 if (arr.length() == 0) { toast("No subfolders in the PC's output folder yet"); return@onSuccess }
                 val names = Array(arr.length()) { arr.getJSONObject(it).getString("name") }
-                val labels = Array(arr.length()) { "${names[it]}  (${arr.getJSONObject(it).optInt("count")})" }
                 val checked = BooleanArray(arr.length()) { arr.getJSONObject(it).optBoolean("sync") }
+
+                val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                list.addView(Ui.text(
+                    this,
+                    "Tick PC folders to move to the phone (they're deleted from the PC once copied). " +
+                        "Tap the → line to choose where on the phone they go.",
+                    13f, Ui.TEXT_DIM
+                ))
+                for (i in names.indices) {
+                    val name = names[i]
+                    val card = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        background = Ui.rounded(this@ComfyActivity, Ui.SURFACE, 8)
+                        setPadding(dp(8), dp(4), dp(8), dp(8))
+                    }
+                    val cb = CheckBox(this).apply {
+                        text = "$name  (${arr.getJSONObject(i).optInt("count")})"
+                        textSize = 16f
+                        setTextColor(Ui.TEXT)
+                        isChecked = checked[i]
+                    }
+                    val dest = TextView(this).apply {
+                        textSize = 13f
+                        setPadding(dp(36), dp(2), dp(4), dp(6))
+                    }
+                    fun showDest() {
+                        dest.text = "→ " + shortPath(SyncManager.destFor(this, name)) + "   (change)"
+                        dest.setTextColor(if (cb.isChecked) Color.parseColor("#8AB4F8") else Ui.TEXT_DIM)
+                    }
+                    cb.setOnCheckedChangeListener { _, on -> checked[i] = on; showDest() }
+                    dest.setOnClickListener {
+                        FolderPicker(this, "Phone folder for \"$name\"", SyncManager.destFor(this, name)) { f ->
+                            SyncManager.setDest(this, name, f)
+                            showDest()
+                        }.show()
+                    }
+                    showDest()
+                    card.addView(cb)
+                    card.addView(dest)
+                    list.addView(card, lp(top = 6))
+                }
+                val box = ScrollView(this).apply {
+                    setPadding(dp(16), dp(8), dp(16), 0)
+                    addView(list)
+                }
                 AlertDialog.Builder(this)
-                    .setTitle("Move to phone (removed from PC)")
-                    .setMultiChoiceItems(labels, checked) { _, i, on -> checked[i] = on }
+                    .setTitle("Move images to phone")
+                    .setView(box)
                     .setPositiveButton("Save") { _, _ ->
                         val sel = JSONArray()
                         names.indices.filter { checked[it] }.forEach { sel.put(names[it]) }
                         ComfyApi.bg({ ComfyApi.post(this, "/isb/config", JSONObject().put("sync_folders", sel).toString()) }) { rr ->
                             rr.onSuccess {
+                                val lines = names.indices.filter { checked[it] }
+                                    .joinToString("\n") { "• ${names[it]} → ${shortPath(SyncManager.destFor(this, names[it]))}" }
                                 AlertDialog.Builder(this).setTitle("Saved")
                                     .setMessage(
                                         if (sel.length() == 0) "Nothing moves to the phone."
-                                        else "Images in the checked folders now move to Pictures/ComfyUI on this phone while the app is open, " +
-                                            "and are deleted from the PC once safely copied. Other folders (Hermes, sprites…) stay on the PC."
+                                        else "While the app is open, new images move like this:\n\n$lines\n\n" +
+                                            "They're deleted from the PC once safely copied. Unticked folders stay on the PC."
                                     )
                                     .setPositiveButton("OK", null).show()
                             }.onFailure { toast(ComfyApi.explain(it)) }
@@ -439,7 +488,7 @@ class ComfyActivity : Activity() {
     }
 
     private fun openSorter() {
-        val dir = SyncManager.phoneRoot().apply { mkdirs() }
+        val dir = (SyncManager.lastDir?.takeIf { it.isDirectory } ?: SyncManager.phoneRoot()).apply { mkdirs() }
         startActivity(
             Intent(this, MainActivity::class.java).putExtra("browse", dir.absolutePath)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)

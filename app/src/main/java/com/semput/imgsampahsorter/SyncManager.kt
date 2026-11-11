@@ -17,7 +17,23 @@ object SyncManager {
     @Volatile var lastFile: String? = null; private set
     @Volatile private var thread: Thread? = null
 
+    @Volatile var lastDir: File? = null; private set
+
     fun phoneRoot(): File = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ComfyUI")
+
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("comfy", Context.MODE_PRIVATE)
+
+    /** Phone folder that images from PC output folder [pcFolder] go into. */
+    fun destFor(ctx: Context, pcFolder: String): File =
+        prefs(ctx).getString("dest:$pcFolder", null)?.let { File(it) } ?: File(phoneRoot(), pcFolder)
+
+    fun isCustomDest(ctx: Context, pcFolder: String) = prefs(ctx).contains("dest:$pcFolder")
+
+    fun setDest(ctx: Context, pcFolder: String, dir: File?) {
+        val e = prefs(ctx).edit()
+        if (dir == null) e.remove("dest:$pcFolder") else e.putString("dest:$pcFolder", dir.absolutePath)
+        e.apply()
+    }
 
     fun start(ctx: Context) {
         if (!ComfyApi.isPaired(ctx)) return
@@ -50,13 +66,13 @@ object SyncManager {
         val files = res.getJSONArray("files")
         waitingOnPc = res.optInt("total", files.length())
         var moved = 0
-        val root = phoneRoot()
         for (i in 0 until minOf(files.length(), 20)) {
             val f = files.getJSONObject(i)
             val rel = f.getString("path")
             val size = f.getLong("size")
             if (rel.split('/').any { it == ".." || it.isEmpty() }) continue
-            var dest = File(root, rel)
+            val parts = rel.split('/')
+            var dest = File(destFor(ctx, parts[0]), parts.drop(1).joinToString("/"))
             val alreadyHave = dest.exists() && dest.length() == size
             if (!alreadyHave) {
                 if (dest.exists()) dest = FileOps.uniqueTarget(dest.parentFile!!, dest.name)
@@ -72,6 +88,7 @@ object SyncManager {
             moved++
             waitingOnPc = (waitingOnPc - 1).coerceAtLeast(0)
             lastFile = rel
+            lastDir = dest.parentFile
         }
         return moved
     }
