@@ -86,6 +86,7 @@ class ComfyActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Ui.hideFromRecents(this)
         root = FrameLayout(this).apply { setBackgroundColor(Ui.BG) }
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

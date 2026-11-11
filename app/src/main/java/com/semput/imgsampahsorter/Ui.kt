@@ -17,6 +17,15 @@ object Ui {
     val TEXT = Color.parseColor("#EEEEEE")
     val TEXT_DIM = Color.parseColor("#9E9E9E")
 
+    /**
+     * Keep this screen's contents out of the recent-apps overview (blank thumbnail).
+     * Android 13+ can do this without blocking screenshots; older versions need FLAG_SECURE.
+     */
+    fun hideFromRecents(act: android.app.Activity) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) act.setRecentsScreenshotEnabled(false)
+        else act.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
     fun dp(ctx: Context, v: Int): Int = (v * ctx.resources.displayMetrics.density).toInt()
 
     fun rounded(ctx: Context, color: Int, radiusDp: Int = 24): GradientDrawable =

@@ -68,6 +68,7 @@ class SorterActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Ui.hideFromRecents(this)
         dir = File(intent.getStringExtra("dir") ?: run { finish(); return })
         val dm = resources.displayMetrics
         loader = ImageLoader(min(dm.widthPixels, dm.heightPixels))
@@ -85,6 +86,13 @@ class SorterActivity : Activity() {
     override fun onPause() {
         super.onPause()
         prefs.edit().putString(posKey, images.getOrNull(index)?.name).apply()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Left the app (home, app switch, screen off): close the image viewer so no picture is
+        // left on screen. The position is saved in onPause, so "Continue" picks up from here.
+        if (!isChangingConfigurations) finish()
     }
 
     override fun onDestroy() {
@@ -720,16 +728,9 @@ class SorterActivity : Activity() {
     }
 
     /** Leaving the folder: remind about anything still sitting in the trash. */
+    /** Leaving the folder. Trash is kept; empty it with the Trash button when you're done. */
     private fun leave() {
-        val files = FileOps.trashFiles(dir)
-        if (files.isEmpty()) { finish(); return }
-        AlertDialog.Builder(this)
-            .setTitle("${files.size} images in trash")
-            .setMessage("Delete them forever now, or keep them in the trash folder for later?")
-            .setPositiveButton("Delete forever…") { _, _ -> confirmDelete(files, finishAfter = true) }
-            .setNeutralButton("Keep for later") { _, _ -> finish() }
-            .setNegativeButton("Stay", null)
-            .show()
+        finish()
     }
 
     @Deprecated("Deprecated in Java")

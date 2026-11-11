@@ -11,7 +11,7 @@ Android app for sorting a folder of images fast with swipes.
 
 - **Undo** button puts back the last image you trashed or marked good (as many steps as you like).
 - **Trash (N)** button at the top: delete everything in trash forever (asks to confirm), or restore all.
-- When you leave a folder with images still in trash, it asks whether to delete them now or keep them for later.
+- Trash is kept until you empty it with the Trash button. Leaving the app closes the image viewer, and the recent-apps thumbnail stays blank.
 - Pinch or double-tap to zoom; drag to look around while zoomed.
 - Remembers where you were in each folder, and asks on opening whether to continue or start from 1.
 - Tap the counter at the top (e.g. "12 / 300") to jump to any image number.
