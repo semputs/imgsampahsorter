@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.4"
+VERSION = "1.5"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -291,6 +291,151 @@ class ComfyProcess:
 
 
 COMFY_PROC = ComfyProcess()
+
+
+# ------------------------------------------------------------------ progress add-on for ComfyUI
+
+PROGRESS_NODE = r'''"""
+ImgSampah progress tracker (installed by ImgSampah Bridge).
+
+ComfyUI only sends live progress to the browser tab that queued a job. This records
+progress for every job so the phone app can show it: GET /api/isb_progress
+No nodes are added; it only listens.
+"""
+import time
+import threading
+
+from aiohttp import web
+import server
+
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
+
+ISB_PROGRESS_VERSION = 1
+_lock = threading.Lock()
+_state = {}
+
+
+def _reset():
+    _state.clear()
+    _state.update({
+        "running": False, "prompt_id": None, "started": None, "node": None, "node_title": None,
+        "node_started": None, "value": 0, "max": 0, "nodes_total": 0, "nodes_done": [], "last_event": None,
+    })
+
+
+_reset()
+_titles = {}
+
+
+def _load_prompt(ps, prompt_id):
+    """Map node id -> nice title for the running prompt."""
+    _titles.clear()
+    try:
+        q = ps.prompt_queue
+        getter = getattr(q, "get_current_queue_volatile", None) or q.get_current_queue
+        running, _ = getter()
+        for item in running:
+            if len(item) > 2 and item[1] == prompt_id:
+                prompt = item[2] or {}
+                for nid, node in prompt.items():
+                    meta = node.get("_meta") or {}
+                    _titles[str(nid)] = meta.get("title") or node.get("class_type") or str(nid)
+                _state["nodes_total"] = len(prompt)
+                return
+    except Exception:
+        pass
+
+
+def _track(ps, event, data):
+    if not isinstance(data, dict):
+        return
+    now = time.time()
+    with _lock:
+        if event == "execution_start":
+            _reset()
+            _state.update(running=True, prompt_id=data.get("prompt_id"), started=now)
+            _load_prompt(ps, data.get("prompt_id"))
+        elif event == "execution_cached":
+            for n in data.get("nodes") or []:
+                if n not in _state["nodes_done"]:
+                    _state["nodes_done"].append(n)
+        elif event == "executing":
+            node = data.get("node")
+            prev = _state.get("node")
+            if prev and prev not in _state["nodes_done"]:
+                _state["nodes_done"].append(prev)
+            if node is None:
+                _reset()
+            else:
+                if not _state["running"]:
+                    _state.update(running=True, prompt_id=data.get("prompt_id"), started=now)
+                    _load_prompt(ps, data.get("prompt_id"))
+                node = str(node)
+                _state.update(node=node, node_title=_titles.get(node, node), node_started=now, value=0, max=0)
+        elif event == "progress":
+            node = data.get("node")
+            if node is not None and str(node) != _state.get("node"):
+                _state.update(node=str(node), node_title=_titles.get(str(node), str(node)), node_started=now)
+            _state.update(value=data.get("value", 0), max=data.get("max", 0))
+        elif event in ("execution_success", "execution_error", "execution_interrupted"):
+            _reset()
+            _state["last_event"] = event
+            return
+        else:
+            return
+        _state["last_event"] = event
+
+
+def _install():
+    ps = server.PromptServer.instance
+    if getattr(ps, "_isb_progress_installed", False):
+        return
+    original = ps.send_sync
+
+    def send_sync(event, data, sid=None):
+        try:
+            _track(ps, event, data)
+        except Exception:
+            pass
+        return original(event, data, sid)
+
+    ps.send_sync = send_sync
+    ps._isb_progress_installed = True
+
+    @ps.routes.get("/isb_progress")
+    async def isb_progress(request):
+        with _lock:
+            s = dict(_state)
+            s["nodes_done"] = len(_state["nodes_done"])
+        now = time.time()
+        s["elapsed"] = round(now - s["started"], 1) if s.get("started") else 0
+        if s.get("node_started") and s.get("max") and s.get("value"):
+            per = (now - s["node_started"]) / max(s["value"], 1)
+            s["node_eta"] = round(per * (s["max"] - s["value"]), 1)
+        s["version"] = ISB_PROGRESS_VERSION
+        return web.json_response(s)
+
+
+_install()
+'''
+PROGRESS_STATE = {"installed": False, "changed": False}
+
+
+def ensure_progress_node():
+    """Put the tiny progress tracker into ComfyUI's custom_nodes (active after ComfyUI restarts)."""
+    if not PATHS.get("comfy_dir"):
+        return
+    target = Path(PATHS["comfy_dir"]) / "custom_nodes" / "isb_progress.py"
+    try:
+        current = target.read_text(encoding="utf-8") if target.exists() else None
+        if current != PROGRESS_NODE:
+            target.write_text(PROGRESS_NODE, encoding="utf-8")
+            PROGRESS_STATE["changed"] = True
+            log.info("installed progress add-on at %s", target)
+        PROGRESS_STATE["installed"] = True
+    except Exception as e:
+        log.warning("couldn't install progress add-on: %s", e)
 
 
 # ------------------------------------------------------------------ security
@@ -719,6 +864,7 @@ async def proxy_ws(request: web.Request):
 # ------------------------------------------------------------------ app
 
 async def on_startup(app):
+    ensure_progress_node()
     app["session"] = aiohttp.ClientSession(
         auto_decompress=False,
         cookie_jar=aiohttp.DummyCookieJar(),

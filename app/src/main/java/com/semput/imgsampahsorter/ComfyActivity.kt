@@ -62,6 +62,9 @@ class ComfyActivity : Activity() {
     private var syncText: TextView? = null
     private var workflowsBox: LinearLayout? = null
     private var powerButton: TextView? = null
+    private var progressBox: LinearLayout? = null
+    private var progressBar: android.widget.ProgressBar? = null
+    private var progressText: TextView? = null
     private var comfyOn = true
 
     // Quick edit
@@ -139,6 +142,7 @@ class ComfyActivity : Activity() {
         if (editor) return
         content.removeAllViews()
         statusText = null; syncText = null; workflowsBox = null; powerButton = null
+        progressBox = null; progressBar = null; progressText = null
         when (s) {
             Screen.SETUP -> renderSetup()
             Screen.HOME -> renderHome()
@@ -215,6 +219,21 @@ class ComfyActivity : Activity() {
         box.addView(Ui.text(this, "ComfyUI", 24f))
         statusText = Ui.text(this, "Connecting…", 14f, Ui.TEXT_DIM)
         box.addView(statusText, lp(top = 4))
+        val pb = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = Ui.rounded(this@ComfyActivity, Ui.SURFACE, 10)
+            setPadding(dp(12), dp(8), dp(12), dp(10))
+        }
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progressTintList = android.content.res.ColorStateList.valueOf(Ui.GREEN)
+        }
+        val ptxt = Ui.text(this, "", 14f)
+        pb.addView(ptxt)
+        pb.addView(bar, lp(top = 4))
+        progressBox = pb; progressBar = bar; progressText = ptxt
+        box.addView(pb, lp(top = 6))
         syncText = Ui.text(this, "", 13f, Ui.TEXT_DIM)
         box.addView(syncText, lp(top = 2))
 
@@ -271,6 +290,12 @@ class ComfyActivity : Activity() {
         ComfyApi.bg({
             val st = JSONObject(ComfyApi.get(this, "/isb/status"))
             val q = if (st.optBoolean("comfy_running")) runCatching { JSONObject(ComfyApi.get(this, "/api/queue")) }.getOrNull() else null
+            val running = (q?.optJSONArray("queue_running")?.length() ?: 0) > 0
+            progress = if (running) {
+                try { JSONObject(ComfyApi.get(this, "/api/isb_progress")) }
+                catch (e: ComfyApi.HttpError) { if (e.code == 404) JSONObject().put("missing", true) else null }
+                catch (_: Exception) { null }
+            } else null
             st to q
         }) { r ->
             val t = statusText ?: return@bg
@@ -298,8 +323,61 @@ class ComfyActivity : Activity() {
                 if (SyncManager.waitingOnPc > 0) append(" · waiting on PC: ${SyncManager.waitingOnPc}")
                 SyncManager.lastError?.let { append("\nSync: $it") }
             }
-            main.postAtTime({ poll() }, POLL, android.os.SystemClock.uptimeMillis() + 3000)
+            val busy = showProgress(progress)
+            main.postAtTime({ poll() }, POLL, android.os.SystemClock.uptimeMillis() + if (busy) 1500 else 3000)
         }
+    }
+
+    @Volatile private var progress: JSONObject? = null
+
+    private fun fmtSecs(s: Double): String {
+        val t = s.toLong()
+        return if (t >= 60) "${t / 60}m ${t % 60}s" else "${t}s"
+    }
+
+    /** Fill the progress card; returns true while something is running. */
+    private fun showProgress(p: JSONObject?): Boolean {
+        val box = progressBox ?: return false
+        val bar = progressBar ?: return false
+        val txt = progressText ?: return false
+        if (p == null) { box.visibility = View.GONE; return false }
+        box.visibility = View.VISIBLE
+        if (p.optBoolean("missing")) {
+            txt.text = "Live progress needs one ComfyUI restart (tap ↻ Restart ComfyUI below)."
+            txt.setTextColor(Ui.TEXT_DIM)
+            bar.visibility = View.GONE
+            return true
+        }
+        if (!p.optBoolean("running")) {
+            txt.text = "Starting…"
+            txt.setTextColor(Ui.TEXT_DIM)
+            bar.isIndeterminate = true
+            bar.visibility = View.VISIBLE
+            return true
+        }
+        val title = p.optString("node_title").ifEmpty { "Working" }
+        val value = p.optDouble("value", 0.0)
+        val max = p.optDouble("max", 0.0)
+        val total = p.optInt("nodes_total")
+        val done = p.optInt("nodes_done")
+        val line1 = StringBuilder(title)
+        if (max > 0) {
+            val pct = (value * 100 / max).toInt()
+            line1.append(" · step ${value.toInt()}/${max.toInt()} ($pct%)")
+            if (p.has("node_eta")) line1.append(" · ~${fmtSecs(p.optDouble("node_eta"))} left")
+            bar.isIndeterminate = false
+            bar.progress = (value * 1000 / max).toInt()
+        } else {
+            bar.isIndeterminate = true
+        }
+        val line2 = buildString {
+            if (total > 0) append("Node ${(done + 1).coerceAtMost(total)} of $total · ")
+            append("${fmtSecs(p.optDouble("elapsed", 0.0))} so far")
+        }
+        txt.text = "$line1\n$line2"
+        txt.setTextColor(Ui.TEXT)
+        bar.visibility = View.VISIBLE
+        return true
     }
 
     private fun simplePost(path: String, body: String, okMsg: String) {
