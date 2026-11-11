@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Speed Test (live)</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1f24; --muted: #5f6b78; --line: #dde2e8;
+    --c-fast: #3f6fd8; --c-fast2: #6f97ea; --c-lora: #d9822b; --c-lora2: #e9a865; --c-v2: #2e9d6b; --c-v22: #63c194;
+    --ok: #2e9d6b; --bad: #d64545; --keep: #3f6fd8; --reload: #d9822b;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121418; --panel: #1b1f25; --fg: #e8ecf1; --muted: #9aa6b3; --line: #2c333c;
+      --c-fast: #6f97ea; --c-fast2: #9db8f2; --c-lora: #ec9a4b; --c-lora2: #f2bb83; --c-v2: #4cc28c; --c-v22: #86dbb3;
+      --ok: #4cc28c; --bad: #ef6b6b; --keep: #6f97ea; --reload: #ec9a4b;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px max(16px, env(safe-area-inset-left)) 40px max(16px, env(safe-area-inset-right)); display: grid; gap: 14px; }
+  h1 { font-size: 1.45rem; margin: 0; font-weight: 650; }
+  h2 { font-size: 1rem; margin: 0 0 4px; font-weight: 650; }
+  .muted { color: var(--muted); font-size: .85rem; }
+  .lede { font-size: 1.05rem; margin: 4px 0 0; }
+  .lede b { font-variant-numeric: tabular-nums; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+  .big { font-size: 2rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; background: var(--ok); width: 0; transition: width .4s; }
+  .bar.step > div { background: var(--keep); }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 10px; }
+  .k { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+  .v { font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .tw { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: .78rem; }
+  svg { display: block; width: 100%; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  svg .val { fill: var(--fg); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; color: var(--muted); margin: 6px 0; padding: 0; list-style: none; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .status { font-size: .8rem; color: var(--muted); }
+  .status.err { color: var(--bad); }
+  .note { font-size: .82rem; color: var(--muted); margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Speed Test <span class="muted">· live</span></h1>
+    <p class="lede" id="lede">Loading…</p>
+    <p class="status" id="status"></p>
+  </header>
+
+  <section class="card">
+    <h2>Progress</h2>
+    <div class="row"><span class="big" id="done">—</span><span class="muted">runs done (2 warm-ups not counted in averages)</span></div>
+    <div class="bar"><div id="donebar"></div></div>
+    <div class="facts">
+      <div><div class="k">Running now</div><div class="v" id="cur">—</div></div>
+      <div><div class="k">This run so far</div><div class="v" id="elapsed">—</div></div>
+      <div><div class="k">Setting now</div><div class="v" id="mode">—</div></div>
+      <div><div class="k">Estimated finish</div><div class="v" id="eta">—</div></div>
+    </div>
+    <div class="row" style="margin-top:10px"><span class="muted" id="step">—</span></div>
+    <div class="bar step"><div id="stepbar"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Average time per run</h2>
+    <p class="muted" style="margin:0">Warm-ups and failed runs left out. Shorter is faster.</p>
+    <ul class="legend"><li><i style="background:var(--keep)"></i>Keep model on card (rounds 1–5)</li><li><i style="background:var(--reload)"></i>Reload each run (rounds 6–10)</li></ul>
+    <div id="bars"></div>
+  </section>
+
+  <section class="card">
+    <h2>Workflow comparison</h2>
+    <div class="tw"><table>
+      <thead><tr><th>Workflow</th><th>Keep on card</th><th>Runs</th><th>Reload each run</th><th>Runs</th><th>Per image</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+    <p class="note">fast = 20 steps, dpmpp_2m, CFG 5. lora = DMD2 speed LoRA, 8 steps, lcm, CFG 1, strength 1.0, sgm_uniform.<br>
+    <b>Changed halfway:</b> from round 6 the LoRA workflows use strength 0.7 + karras (asked for at 06:38). Those are the <b>_v2</b> rows, so for the LoRA, keep vs reload is mixed with the settings change. The fast workflows compare keep vs reload cleanly.</p>
+  </section>
+
+  <section class="card">
+    <h2>Every run</h2>
+    <p class="muted" style="margin:0">One dot per run. A steady band means steady speed.</p>
+    <ul class="legend" id="tlegend"></ul>
+    <div id="timeline"></div>
+  </section>
+
+  <p class="muted">Served by the helper on your PC. Refreshes every 15 seconds while open.</p>
+</main>
+
+<script>
+(function () {
+  var WF = ['fasttantest', 'fasttantest2', 'lorafasttantest', 'lorafasttantest2', 'lorafasttantest_v2', 'lorafasttantest2_v2'];
+  var COL = { fasttantest: 'var(--c-fast)', fasttantest2: 'var(--c-fast2)', lorafasttantest: 'var(--c-lora)', lorafasttantest2: 'var(--c-lora2)', lorafasttantest_v2: 'var(--c-v2)', lorafasttantest2_v2: 'var(--c-v22)' };
+  var NS = 'http://www.w3.org/2000/svg';
+  var data = null, prog = null, lastOk = 0;
+
+  function fmt(s) { if (s == null || !isFinite(s)) return '—'; s = Math.round(s); var m = Math.floor(s / 60), r = s % 60; return m > 0 ? m + 'm ' + (r < 10 ? '0' : '') + r + 's' : r + 's'; }
+  function clock(ms) { return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+  function avg(a) { return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : null; }
+  function el(tag, attrs, parent) { var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function txt(parent, x, y, s, anchor, cls) { var t = el('text', { x: x, y: y, 'text-anchor': anchor || 'start', 'dominant-baseline': 'middle' }, parent); if (cls) t.setAttribute('class', cls); t.textContent = s; return t; }
+  function $(id) { return document.getElementById(id); }
+
+  function measured() { return data.results.filter(function (r) { return r.ok && !r.warmup && r.seconds != null; }); }
+
+  function summary() {
+    var ok = measured();
+    return WF.map(function (wf) {
+      var mine = ok.filter(function (r) { return r.wf === wf; });
+      var keep = mine.filter(function (r) { return r.mode !== 'reload'; }).map(function (r) { return r.seconds; });
+      var rel = mine.filter(function (r) { return r.mode === 'reload'; }).map(function (r) { return r.seconds; });
+      var all = mine.map(function (r) { return r.seconds; });
+      return { wf: wf, keep: avg(keep), keepN: keep.length, rel: avg(rel), relN: rel.length, all: avg(all) };
+    });
+  }
+
+  function render() {
+    if (!data) return;
+    var res = data.results, ok = measured(), order = data.order;
+    var fast = avg(ok.filter(function (r) { return r.wf.indexOf('lora') !== 0; }).map(function (r) { return r.seconds; }));
+    var lora = avg(ok.filter(function (r) { return r.wf.indexOf('lora') === 0; }).map(function (r) { return r.seconds; }));
+    var fk = avg(ok.filter(function (r) { return r.wf.indexOf('lora') !== 0 && r.mode !== 'reload'; }).map(function (r) { return r.seconds; }));
+    var fr = avg(ok.filter(function (r) { return r.wf.indexOf('lora') !== 0 && r.mode === 'reload'; }).map(function (r) { return r.seconds; }));
+    var L = $('lede'); L.textContent = '';
+    function b(s) { var x = document.createElement('b'); x.textContent = s; L.appendChild(x); }
+    function t(s) { L.appendChild(document.createTextNode(s)); }
+    if (!ok.length) t('Waiting for the first timed run…');
+    else {
+      if (fast && lora) { t('Speed LoRA runs take '); b(fmt(lora)); t(' against '); b(fmt(fast)); t(' without it, '); b((fast / lora).toFixed(1) + '×'); t(' faster.'); }
+      else if (fast) { t('A run without the LoRA takes '); b(fmt(fast)); t('.'); }
+      if (fk && fr) { var p = Math.round((fr - fk) / fr * 100); t(' Keeping the model on the card is '); b(Math.abs(p) + '%'); t(p >= 0 ? ' faster than reloading it.' : ' slower than reloading it.'); }
+    }
+
+    $('done').textContent = res.length + ' / ' + order.length;
+    $('donebar').style.width = Math.min(100, res.length / order.length * 100) + '%';
+    var cur = data.current;
+    if (data.done) { $('cur').textContent = 'Finished'; $('mode').textContent = '—'; $('elapsed').textContent = '—'; }
+    else if (cur) {
+      $('cur').textContent = '#' + cur.n + ' ' + cur.wf;
+      $('mode').textContent = cur.mode === 'reload' ? 'Reload each run' : 'Keep model on card';
+      $('elapsed').textContent = fmt(Date.now() / 1000 - cur.since);
+    } else { $('cur').textContent = 'Between runs / restarting'; }
+
+    // ETA
+    var per = {}; WF.forEach(function (wf) { per[wf] = avg(ok.filter(function (r) { return r.wf === wf; }).map(function (r) { return r.seconds; })); });
+    per.lorafasttantest_v2 = per.lorafasttantest_v2 || per.lorafasttantest || 190;
+    per.lorafasttantest2_v2 = per.lorafasttantest2_v2 || per.lorafasttantest2 || 195;
+    var doneN = {}; res.forEach(function (r) { doneN[r.n] = 1; });
+    var left = 0;
+    order.forEach(function (o) { if (!doneN[o.n]) left += (per[o.wf] || 300) + 3; });
+    if (cur && cur.since) left -= Math.min(per[cur.wf] || 0, Date.now() / 1000 - cur.since);
+    $('eta').textContent = data.done ? 'Finished' : '≈ ' + clock(Date.now() + Math.max(0, left) * 1000);
+
+    // step progress
+    if (prog && prog.running && prog.max) {
+      $('step').textContent = (prog.node_title || 'Working') + ' · step ' + prog.value + '/' + prog.max;
+      $('stepbar').style.width = (prog.value / prog.max * 100) + '%';
+    } else if (prog && prog.running) { $('step').textContent = (prog.node_title || 'Working') + '…'; $('stepbar').style.width = '100%'; }
+    else { $('step').textContent = data.done ? 'Idle' : 'Between steps'; $('stepbar').style.width = '0'; }
+
+    // table
+    var S = summary(), tb = $('tbody'); tb.textContent = '';
+    S.forEach(function (s) {
+      var tr = document.createElement('tr');
+      [s.wf, fmt(s.keep), s.keepN, fmt(s.rel), s.relN, fmt(s.all == null ? null : s.all / 4)].forEach(function (v) { var td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
+
+    // bars
+    var box = $('bars'); box.textContent = '';
+    var rows = S.filter(function (s) { return s.keep != null || s.rel != null; });
+    if (!rows.length) { box.textContent = 'No timed runs yet.'; }
+    else {
+      var W = Math.max(300, box.clientWidth), lw = 130, rw = 64, bh = 13, g = 4, gg = 16;
+      var max = Math.max.apply(null, rows.map(function (s) { return Math.max(s.keep || 0, s.rel || 0); }));
+      var H = rows.length * (2 * bh + g) + (rows.length - 1) * gg + 8;
+      var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Average time per run' }, box);
+      var x = function (v) { return lw + (W - lw - rw) * v / max; };
+      rows.forEach(function (s, i) {
+        var y0 = i * (2 * bh + g + gg);
+        txt(svg, lw - 8, y0 + bh + g / 2, s.wf, 'end');
+        [['keep', 'var(--keep)'], ['rel', 'var(--reload)']].forEach(function (k, j) {
+          var v = s[k[0]], y = y0 + j * (bh + g);
+          if (v == null) { txt(svg, lw + 2, y + bh / 2, 'not yet'); return; }
+          el('rect', { x: lw, y: y, width: Math.max(1, x(v) - lw), height: bh, rx: 3, fill: k[1] }, svg);
+          txt(svg, x(v) + 6, y + bh / 2, fmt(v), 'start', 'val');
+        });
+      });
+    }
+
+    // timeline
+    var lg = $('tlegend'); lg.textContent = '';
+    WF.forEach(function (wf) { var li = document.createElement('li'); li.innerHTML = '<i></i>'; li.firstChild.style.background = COL[wf]; li.appendChild(document.createTextNode(wf)); lg.appendChild(li); });
+    var tbx = $('timeline'); tbx.textContent = '';
+    var pts = res.filter(function (r) { return r.seconds != null; });
+    if (!pts.length) { tbx.textContent = 'No finished runs yet.'; return; }
+    var TW = Math.max(300, tbx.clientWidth), TH = 230, ml = 52, mr = 10, mt = 8, mb = 24;
+    var ymax = Math.max.apply(null, pts.map(function (r) { return r.seconds; })) * 1.1;
+    var sv = el('svg', { viewBox: '0 0 ' + TW + ' ' + TH, height: TH, role: 'img', 'aria-label': 'Time of every run' }, tbx);
+    var X = function (n) { return ml + (TW - ml - mr) * (n - 1) / (order.length - 1); };
+    var Y = function (s) { return TH - mb - (TH - mb - mt) * s / ymax; };
+    [0, .25, .5, .75, 1].forEach(function (f) { var v = ymax * f; el('line', { x1: ml, x2: TW - mr, y1: Y(v), y2: Y(v), stroke: 'var(--line)' }, sv); txt(sv, ml - 6, Y(v), fmt(v), 'end'); });
+    var sw = order.filter(function (o) { return o.mode === 'reload'; })[0];
+    if (sw) { el('line', { x1: X(sw.n - .5), x2: X(sw.n - .5), y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '4 3' }, sv); }
+    txt(sv, ml, TH - 8, '← keep on card');
+    txt(sv, TW - mr, TH - 8, 'reload, LoRA v2 →', 'end');
+    pts.forEach(function (r) {
+      var c = el('circle', { cx: X(r.n), cy: Y(r.seconds), r: 4.5, fill: r.warmup ? 'none' : COL[r.wf] || 'var(--muted)', stroke: r.warmup ? 'var(--muted)' : 'none', 'stroke-width': 2 }, sv);
+      var tt = el('title', {}, c); tt.textContent = '#' + r.n + ' ' + r.wf + (r.warmup ? ' (warm-up)' : '') + ': ' + fmt(r.seconds);
+    });
+  }
+
+  function load() {
+    Promise.all([
+      fetch('/isb/bench/state', { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+      fetch('/api/isb_progress', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+    ]).then(function (a) {
+      data = a[0]; prog = a[1]; lastOk = Date.now();
+      $('status').className = 'status';
+      $('status').textContent = 'Live · updated ' + new Date().toLocaleTimeString();
+      render();
+    }).catch(function (e) {
+      $('status').className = 'status err';
+      $('status').textContent = 'Can\'t reach the PC right now (' + e.message + ')' + (lastOk ? '. Showing data from ' + new Date(lastOk).toLocaleTimeString() + '.' : '.');
+    });
+  }
+  load();
+  setInterval(load, 15000);
+  setInterval(function () { if (data && data.current && !data.done) $('elapsed').textContent = fmt(Date.now() / 1000 - data.current.since); }, 1000);
+  window.addEventListener('resize', render);
+})();
+</script>
+</body>
+</html>

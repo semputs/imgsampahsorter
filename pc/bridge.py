@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.7"
+VERSION = "1.8"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -781,6 +781,50 @@ upd(); setInterval(upd, 3000);
     return web.Response(text=html, content_type="text/html")
 
 
+# ------------------------------------------------------------------ speed test report (live)
+
+BENCH_DIR = APP_DIR / "bench"
+REPORT_URL = "https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc/bench_report.html"
+REPORT_CACHE = APP_DIR / "bench_report.html"
+
+
+def _bench_state():
+    state = load_json(BENCH_DIR / "state.json", {}) or {}
+    plan = load_json(BENCH_DIR / "plan.json", {}) or {}
+    keep = ("n", "wf", "round", "mode", "warmup", "lora_settings")
+    order = [{k: o.get(k) for k in keep} for o in plan.get("order", [])]  # no workflows/prompts
+    results = [{k: r.get(k) for k in keep + ("ok", "seconds", "images", "start", "end", "error")}
+               for r in state.get("results", [])]
+    cur = state.get("current")
+    cur = {k: cur.get(k) for k in keep + ("since",)} if cur else None
+    return {"order": order, "results": results, "current": cur, "done": bool(state.get("done")),
+            "lora_ok": state.get("lora_ok"), "now": time.time()}
+
+
+async def h_bench_state(request):
+    data = await asyncio.to_thread(_bench_state)
+    return web.json_response(data, headers={"Cache-Control": "no-store"})
+
+
+async def h_bench_report(request):
+    html = None
+    fresh = REPORT_CACHE.exists() and time.time() - REPORT_CACHE.stat().st_mtime < 600
+    if not fresh:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
+                async with s.get(REPORT_URL, params={"t": str(int(time.time()))}) as r:
+                    if r.status == 200:
+                        html = await r.text()
+                        REPORT_CACHE.write_text(html, encoding="utf-8")
+        except Exception as e:
+            log.info("report download failed: %s", e)
+    if html is None and REPORT_CACHE.exists():
+        html = REPORT_CACHE.read_text(encoding="utf-8")
+    if html is None:
+        return web.Response(text="Report page not available yet", status=503)
+    return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
 async def h_local_state(request):
     alive = await COMFY_PROC.alive(request.app["session"])
     return web.json_response({"comfy_on": bool(CFG.get("comfy_on", True)), "comfy_running": alive})
@@ -904,6 +948,8 @@ def make_app() -> web.Application:
     app.router.add_post("/isb/local/stop", h_stop)
     app.router.add_post("/isb/local/start", h_start)
     app.router.add_get("/isb/local/state", h_local_state)
+    app.router.add_get("/isb/bench/state", h_bench_state)
+    app.router.add_get("/isb/bench/report", h_bench_report)
     app.router.add_get("/isb/folders", h_folders)
     app.router.add_get("/isb/config", h_get_config)
     app.router.add_post("/isb/config", h_set_config)
