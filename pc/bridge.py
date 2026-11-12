@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "2.0"
+VERSION = "2.1"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -959,6 +959,40 @@ async def gpu_monitor_watch(session):
             log.warning("gpu monitor: %s", e)
 
 
+HISTORY_URL = "https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc/history_export.py"
+
+
+async def history_export_watch():
+    """When Claude drops history_export_request.json here, write run_history.csv."""
+    req = APP_DIR / "history_export_request.json"
+    while True:
+        await asyncio.sleep(5)
+        try:
+            if not req.exists():
+                continue
+            os.replace(req, APP_DIR / "history_export_request.started")
+            mod_path = APP_DIR / "history_export.py"
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                async with s.get(HISTORY_URL, params={"t": str(int(time.time()))}) as r:
+                    if r.status == 200:
+                        mod_path.write_bytes(await r.read())
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("isb_history_export", mod_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            status_path = APP_DIR / "run_history_status.json"
+            status_path.write_text(json.dumps({"status": "running", "at": time.time()}), encoding="utf-8")
+            res = await asyncio.to_thread(mod.export, APP_DIR, Path(PATHS["comfy_dir"]), COMFY, APP_DIR / "run_history.csv")
+            status_path.write_text(json.dumps({"status": "done", "at": time.time(), **res}), encoding="utf-8")
+            log.info("history export done: %s", res)
+        except Exception as e:
+            log.exception("history export failed")
+            try:
+                (APP_DIR / "run_history_status.json").write_text(json.dumps({"status": "error", "error": str(e)}), encoding="utf-8")
+            except Exception:
+                pass
+
+
 async def on_startup(app):
     ensure_progress_node()
     app["session"] = aiohttp.ClientSession(
@@ -969,6 +1003,7 @@ async def on_startup(app):
     )
     app["supervisor"] = asyncio.create_task(COMFY_PROC.supervise(app["session"]))
     app["gpumon"] = asyncio.create_task(gpu_monitor_watch(app["session"]))
+    app["histexp"] = asyncio.create_task(history_export_watch())
 
 
 async def on_cleanup(app):
