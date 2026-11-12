@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.9"
+VERSION = "2.0"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -929,6 +929,36 @@ async def proxy_ws(request: web.Request):
 
 # ------------------------------------------------------------------ app
 
+MONITOR_URL = "https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc/gpu_monitor.ps1"
+
+
+async def gpu_monitor_watch(session):
+    """When Claude drops gpu_monitor_request.json here, run the GPU monitor script hidden for a while."""
+    req = APP_DIR / "gpu_monitor_request.json"
+    while True:
+        await asyncio.sleep(5)
+        try:
+            if not req.exists() or not IS_WIN:
+                continue
+            minutes = int((load_json(req, {}) or {}).get("minutes", 30))
+            minutes = max(1, min(minutes, 180))
+            os.replace(req, APP_DIR / "gpu_monitor_request.started")
+            script = APP_DIR / "gpu_monitor.ps1"
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                async with s.get(MONITOR_URL, params={"t": str(int(time.time()))}) as r:
+                    if r.status == 200:
+                        script.write_bytes(await r.read())
+            if not script.exists():
+                log.warning("gpu monitor script missing")
+                continue
+            subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                              "-File", str(script), "-Minutes", str(minutes)],
+                             creationflags=NO_WINDOW, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log.info("started GPU monitor for %s minutes", minutes)
+        except Exception as e:
+            log.warning("gpu monitor: %s", e)
+
+
 async def on_startup(app):
     ensure_progress_node()
     app["session"] = aiohttp.ClientSession(
@@ -938,6 +968,7 @@ async def on_startup(app):
         connector=aiohttp.TCPConnector(limit=64),
     )
     app["supervisor"] = asyncio.create_task(COMFY_PROC.supervise(app["session"]))
+    app["gpumon"] = asyncio.create_task(gpu_monitor_watch(app["session"]))
 
 
 async def on_cleanup(app):
