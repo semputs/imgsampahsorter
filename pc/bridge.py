@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.8"
+VERSION = "1.9"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -783,22 +783,29 @@ upd(); setInterval(upd, 3000);
 
 # ------------------------------------------------------------------ speed test report (live)
 
-BENCH_DIR = APP_DIR / "bench"
+def _bench_dir():
+    try:
+        name = (APP_DIR / "bench_active.txt").read_text(encoding="utf-8").strip() or "bench"
+    except Exception:
+        name = "bench"
+    return APP_DIR / name
 REPORT_URL = "https://raw.githubusercontent.com/semputs/imgsampahsorter/main/pc/bench_report.html"
 REPORT_CACHE = APP_DIR / "bench_report.html"
 
 
 def _bench_state():
-    state = load_json(BENCH_DIR / "state.json", {}) or {}
-    plan = load_json(BENCH_DIR / "plan.json", {}) or {}
+    d = _bench_dir()
+    state = load_json(d / "state.json", {}) or {}
+    plan = load_json(d / "plan.json", {}) or {}
     keep = ("n", "wf", "round", "mode", "warmup", "lora_settings")
     order = [{k: o.get(k) for k in keep} for o in plan.get("order", [])]  # no workflows/prompts
     results = [{k: r.get(k) for k in keep + ("ok", "seconds", "images", "start", "end", "error")}
                for r in state.get("results", [])]
     cur = state.get("current")
     cur = {k: cur.get(k) for k in keep + ("since",)} if cur else None
+    changes = [{"at": c.get("at"), "what": c.get("what")} for c in plan.get("changes", []) if isinstance(c, dict)]
     return {"order": order, "results": results, "current": cur, "done": bool(state.get("done")),
-            "lora_ok": state.get("lora_ok"), "now": time.time()}
+            "lora_ok": state.get("lora_ok"), "now": time.time(), "test": _bench_dir().name, "changes": changes}
 
 
 async def h_bench_state(request):

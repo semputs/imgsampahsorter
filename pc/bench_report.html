@@ -20,6 +20,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   main { max-width: 860px; margin: 0 auto; padding: 16px max(16px, env(safe-area-inset-left)) 40px max(16px, env(safe-area-inset-right)); display: grid; gap: 14px; }
   h1 { font-size: 1.45rem; margin: 0; font-weight: 650; }
@@ -61,7 +62,7 @@
 
   <section class="card">
     <h2>Progress</h2>
-    <div class="row"><span class="big" id="done">—</span><span class="muted">runs done (2 warm-ups not counted in averages)</span></div>
+    <div class="row"><span class="big" id="done">—</span><span class="muted" id="warmnote">runs done (warm-ups not counted in averages)</span></div>
     <div class="bar"><div id="donebar"></div></div>
     <div class="facts">
       <div><div class="k">Running now</div><div class="v" id="cur">—</div></div>
@@ -76,7 +77,7 @@
   <section class="card">
     <h2>Average time per run</h2>
     <p class="muted" style="margin:0">Warm-ups and failed runs left out. Shorter is faster.</p>
-    <ul class="legend"><li><i style="background:var(--keep)"></i>Keep model on card (rounds 1–5)</li><li><i style="background:var(--reload)"></i>Reload each run (rounds 6–10)</li></ul>
+    <ul class="legend" id="modelegend"><li><i style="background:var(--keep)"></i>Keep model on card (rounds 1–5)</li><li><i style="background:var(--reload)"></i>Reload each run (rounds 6–10)</li></ul>
     <div id="bars"></div>
   </section>
 
@@ -86,7 +87,8 @@
       <thead><tr><th>Workflow</th><th>Keep on card</th><th>Runs</th><th>Reload each run</th><th>Runs</th><th>Per image</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table></div>
-    <p class="note">fast = 20 steps, dpmpp_2m, CFG 5. lora = DMD2 speed LoRA, 8 steps, lcm, CFG 1, strength 1.0, sgm_uniform.<br>
+    <p class="note" id="changes"></p>
+    <p class="note" id="oldnote">fast = 20 steps, dpmpp_2m, CFG 5. lora = DMD2 speed LoRA, 8 steps, lcm, CFG 1, strength 1.0, sgm_uniform.<br>
     <b>Changed halfway:</b> from round 6 the LoRA workflows use strength 0.7 + karras (asked for at 06:38). Those are the <b>_v2</b> rows, so for the LoRA, keep vs reload is mixed with the settings change. The fast workflows compare keep vs reload cleanly.<br>
     <b>Changed at 08:33:</b> LoRA runs stopped (images too soft). After a restart and one warm-up, the remaining fast runs plus 10 extra rounds (11–20) of fasttantest ×3 + fasttantest2 ×3 run with "reload each run".</p>
   </section>
@@ -103,8 +105,10 @@
 
 <script>
 (function () {
-  var WF = ['fasttantest', 'fasttantest2', 'lorafasttantest', 'lorafasttantest2', 'lorafasttantest_v2', 'lorafasttantest2_v2'];
-  var COL = { fasttantest: 'var(--c-fast)', fasttantest2: 'var(--c-fast2)', lorafasttantest: 'var(--c-lora)', lorafasttantest2: 'var(--c-lora2)', lorafasttantest_v2: 'var(--c-v2)', lorafasttantest2_v2: 'var(--c-v22)' };
+  var WF = [];
+  var PAL = ['var(--c-fast)', 'var(--c-lora)', 'var(--c-v2)', 'var(--c-fast2)', 'var(--c-lora2)', 'var(--c-v22)'];
+  var COL = {};
+  function setWF() { WF = []; data.order.forEach(function (o) { if (!o.warmup && WF.indexOf(o.wf) < 0) WF.push(o.wf); }); WF.forEach(function (w, i) { COL[w] = PAL[i % PAL.length]; }); }
   var NS = 'http://www.w3.org/2000/svg';
   var data = null, prog = null, lastOk = 0;
 
@@ -124,12 +128,18 @@
       var keep = mine.filter(function (r) { return r.mode !== 'reload'; }).map(function (r) { return r.seconds; });
       var rel = mine.filter(function (r) { return r.mode === 'reload'; }).map(function (r) { return r.seconds; });
       var all = mine.map(function (r) { return r.seconds; });
-      return { wf: wf, keep: avg(keep), keepN: keep.length, rel: avg(rel), relN: rel.length, all: avg(all) };
+      var perImg = avg(mine.map(function (r) { return r.seconds / (r.images || 4); }));
+      return { wf: wf, keep: avg(keep), keepN: keep.length, rel: avg(rel), relN: rel.length, all: avg(all), perImg: perImg };
     });
   }
 
   function render() {
     if (!data) return;
+    setWF();
+    var hasKeep = data.order.some(function (o) { return o.mode !== 'reload'; });
+    $('modelegend').hidden = !hasKeep;
+    document.querySelectorAll('table th:nth-child(2), table th:nth-child(3)').forEach(function (th) { th.hidden = !hasKeep; });
+    var th4 = document.querySelector('table th:nth-child(4)'); if (th4) th4.textContent = hasKeep ? 'Reload each run' : 'Avg per run';
     var res = data.results, ok = measured(), order = data.order;
     var fast = avg(ok.filter(function (r) { return r.wf.indexOf('lora') !== 0; }).map(function (r) { return r.seconds; }));
     var lora = avg(ok.filter(function (r) { return r.wf.indexOf('lora') === 0; }).map(function (r) { return r.seconds; }));
@@ -139,6 +149,12 @@
     function b(s) { var x = document.createElement('b'); x.textContent = s; L.appendChild(x); }
     function t(s) { L.appendChild(document.createTextNode(s)); }
     if (!ok.length) t('Waiting for the first timed run…');
+    else if (!lora && !(fk && fr)) {
+      var ranked = summary().filter(function (s) { return s.perImg != null; }).sort(function (a, b) { return a.perImg - b.perImg; });
+      t('Time per image so far: ');
+      ranked.forEach(function (s, i) { if (i) t(', '); t(s.wf + ' '); b(fmt(s.perImg)); });
+      t('.');
+    }
     else {
       if (fast && lora) { t('Speed LoRA runs take '); b(fmt(lora)); t(' against '); b(fmt(fast)); t(' without it, '); b((fast / lora).toFixed(1) + '×'); t(' faster.'); }
       else if (fast) { t('A run without the LoRA takes '); b(fmt(fast)); t('.'); }
@@ -172,11 +188,15 @@
     } else if (prog && prog.running) { $('step').textContent = (prog.node_title || 'Working') + '…'; $('stepbar').style.width = '100%'; }
     else { $('step').textContent = data.done ? 'Idle' : 'Between steps'; $('stepbar').style.width = '0'; }
 
+    var ch = $('changes'); ch.textContent = '';
+    (data.changes || []).forEach(function (c) { var bb = document.createElement('b'); bb.textContent = (c.at || '').replace('T', ' ').slice(0, 16) + ': '; ch.appendChild(bb); ch.appendChild(document.createTextNode(c.what || '')); ch.appendChild(document.createElement('br')); });
+    $('oldnote').hidden = data.test !== 'bench';
     // table
     var S = summary(), tb = $('tbody'); tb.textContent = '';
     S.forEach(function (s) {
       var tr = document.createElement('tr');
-      [s.wf, fmt(s.keep), s.keepN, fmt(s.rel), s.relN, fmt(s.all == null ? null : s.all / 4)].forEach(function (v) { var td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+      [s.wf, fmt(s.keep), s.keepN, fmt(s.rel), s.relN, fmt(s.perImg)].forEach(function (v) { var td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+      if (!hasKeep) { tr.children[1].hidden = true; tr.children[2].hidden = true; }
       tb.appendChild(tr);
     });
 
@@ -187,13 +207,14 @@
     else {
       var W = Math.max(300, box.clientWidth), lw = 130, rw = 64, bh = 13, g = 4, gg = 16;
       var max = Math.max.apply(null, rows.map(function (s) { return Math.max(s.keep || 0, s.rel || 0); }));
-      var H = rows.length * (2 * bh + g) + (rows.length - 1) * gg + 8;
+      var per = hasKeep ? 2 : 1;
+      var H = rows.length * (per * bh + (per - 1) * g) + (rows.length - 1) * gg + 8;
       var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Average time per run' }, box);
       var x = function (v) { return lw + (W - lw - rw) * v / max; };
       rows.forEach(function (s, i) {
-        var y0 = i * (2 * bh + g + gg);
-        txt(svg, lw - 8, y0 + bh + g / 2, s.wf, 'end');
-        [['keep', 'var(--keep)'], ['rel', 'var(--reload)']].forEach(function (k, j) {
+        var y0 = i * (per * bh + (per - 1) * g + gg);
+        txt(svg, lw - 8, y0 + (per * bh + (per - 1) * g) / 2, s.wf, 'end');
+        (hasKeep ? [['keep', 'var(--keep)'], ['rel', 'var(--reload)']] : [['rel', COL[s.wf]]]).forEach(function (k, j) {
           var v = s[k[0]], y = y0 + j * (bh + g);
           if (v == null) { txt(svg, lw + 2, y + bh / 2, 'not yet'); return; }
           el('rect', { x: lw, y: y, width: Math.max(1, x(v) - lw), height: bh, rx: 3, fill: k[1] }, svg);
@@ -216,11 +237,10 @@
     var Y = function (s) { return TH - mb - (TH - mb - mt) * s / ymax; };
     [0, .25, .5, .75, 1].forEach(function (f) { var v = ymax * f; el('line', { x1: ml, x2: TW - mr, y1: Y(v), y2: Y(v), stroke: 'var(--line)' }, sv); txt(sv, ml - 6, Y(v), fmt(v), 'end'); });
     var sw = order.filter(function (o) { return o.mode === 'reload'; })[0];
-    if (sw) { var xs = X(sw.n) - 3; el('line', { x1: xs, x2: xs, y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '4 3' }, sv); }
+    if (sw && hasKeep) { var xs = X(sw.n) - 3; el('line', { x1: xs, x2: xs, y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '4 3' }, sv); }
     var ex = order.filter(function (o) { return o.round >= 11; })[0];
     if (ex) { var xe = X(ex.n) - 3; el('line', { x1: xe, x2: xe, y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '2 3' }, sv); txt(sv, xe + 4, mt + 6, 'LoRA stopped, extra rounds'); }
-    txt(sv, ml, TH - 8, '← keep on card');
-    txt(sv, TW - mr, TH - 8, 'reload, LoRA v2 →', 'end');
+    if (hasKeep) { txt(sv, ml, TH - 8, '← keep on card'); txt(sv, TW - mr, TH - 8, 'reload, LoRA v2 →', 'end'); }
     pts.forEach(function (r) {
       var c = el('circle', { cx: X(r.n), cy: Y(r.seconds), r: 4.5, fill: r.warmup ? 'none' : COL[r.wf] || 'var(--muted)', stroke: r.warmup ? 'var(--muted)' : 'none', 'stroke-width': 2 }, sv);
       var tt = el('title', {}, c); tt.textContent = '#' + r.n + ' ' + r.wf + (r.warmup ? ' (warm-up)' : '') + ': ' + fmt(r.seconds);
