@@ -308,7 +308,6 @@ def append_new(app_dir: Path, comfy_dir: Path, comfy_url: str, out_csv: Path) ->
     with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
         w.writeheader()
-        w.writerows(new_rows)
-        w.writerows(existing)
+        w.writerows(sorted(new_rows + existing, key=lambda r: r.get("finished_local") or "", reverse=True))
     tmp.replace(out_csv)  # fails (and is retried later) while the file is open in Excel
     return len(new_rows)
