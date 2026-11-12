@@ -31,6 +31,12 @@ while ((Get-Date) -lt $end) {
         if ($x.InstanceName -match 'pid_(\d+)') { $msum[$matches[1]] = [double]$msum[$matches[1]] + $x.CookedValue }
     }
     foreach ($p in $msum.Keys) { if ($msum[$p] -gt 50MB) { $lines += "$t,$p,$(NameOf ([int]$p)),vram_MB,$([math]::Round($msum[$p]/1MB))" } }
+    $sh = (Get-Counter '\GPU Process Memory(*)\Shared Usage').CounterSamples
+    $ssum = @{}
+    foreach ($x in $sh) {
+        if ($x.InstanceName -match 'pid_(\d+)') { $ssum[$matches[1]] = [double]$ssum[$matches[1]] + $x.CookedValue }
+    }
+    foreach ($p in $ssum.Keys) { if ($ssum[$p] -gt 50MB) { $lines += "$t,$p,$(NameOf ([int]$p)),shared_MB,$([math]::Round($ssum[$p]/1MB))" } }
     $ad = (Get-Counter '\GPU Adapter Memory(*)\Dedicated Usage').CounterSamples | Measure-Object -Property CookedValue -Maximum
     if ($ad) { $lines += "$t,0,_total,vram_total_MB,$([math]::Round($ad.Maximum/1MB))" }
     $lines | Add-Content $out -Encoding UTF8
