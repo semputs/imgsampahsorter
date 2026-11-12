@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "2.3"
+VERSION = "2.4"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -1053,6 +1053,68 @@ async def run_log_watch():
 app_session_holder = {}
 
 
+QUEUE_SAVE = APP_DIR / "queue_saved.json"
+
+
+async def _comfy_json(session, path, data=None):
+    t = aiohttp.ClientTimeout(total=30)
+    if data is None:
+        async with session.get(COMFY + path, timeout=t) as r:
+            return json.loads(await r.read())
+    async with session.post(COMFY + path, json=data, timeout=t) as r:
+        return json.loads(await r.read())
+
+
+async def queue_keeper():
+    """Keep a copy of ComfyUI's queue on disk, so it survives a PC or ComfyUI restart.
+    After ComfyUI starts, anything in the saved copy that isn't queued, running or finished
+    is queued again (the run that was cut off by the restart starts over)."""
+    session = app_session_holder["s"]
+    # 1. put back what was saved before the restart
+    try:
+        saved = json.loads(QUEUE_SAVE.read_text(encoding="utf-8")) if QUEUE_SAVE.exists() else []
+    except Exception:
+        saved = []
+    if saved:
+        while not await COMFY_PROC.alive(session):
+            await asyncio.sleep(10)
+        await asyncio.sleep(5)
+        try:
+            q = await _comfy_json(session, "/queue")
+            hist = await _comfy_json(session, "/history?max_items=1000")
+            have = {i[1] for i in (q.get("queue_running") or []) + (q.get("queue_pending") or [])} | set(hist)
+            n = 0
+            for item in saved:
+                if item["prompt_id"] in have:
+                    continue
+                extra = item.get("extra_data") or {}
+                body = {"prompt": item["prompt"], "extra_data": extra}
+                if extra.get("client_id"):
+                    body["client_id"] = extra["client_id"]
+                await _comfy_json(session, "/prompt", body)
+                n += 1
+            if n:
+                log.info("queue: put back %s run(s) saved before the restart", n)
+        except Exception as e:
+            log.warning("queue restore: %s", e)
+    # 2. keep the saved copy up to date
+    while True:
+        await asyncio.sleep(5)
+        try:
+            if not await COMFY_PROC.alive(session):
+                if not CFG.get("comfy_on", True) and QUEUE_SAVE.exists():
+                    QUEUE_SAVE.unlink()  # switched off on purpose: don't bring the old queue back later
+                continue
+            q = await _comfy_json(session, "/queue")
+            items = sorted((q.get("queue_running") or []) + (q.get("queue_pending") or []), key=lambda i: i[0])
+            snap = [{"prompt_id": i[1], "prompt": i[2], "extra_data": i[3] if len(i) > 3 else {}} for i in items]
+            tmp = QUEUE_SAVE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(snap), encoding="utf-8")
+            os.replace(tmp, QUEUE_SAVE)
+        except Exception:
+            pass
+
+
 async def on_startup(app):
     ensure_progress_node()
     app["session"] = aiohttp.ClientSession(
@@ -1066,6 +1128,7 @@ async def on_startup(app):
     app["histexp"] = asyncio.create_task(history_export_watch())
     app_session_holder["s"] = app["session"]
     app["runlog"] = asyncio.create_task(run_log_watch())
+    app["queuekeeper"] = asyncio.create_task(queue_keeper())
 
 
 async def on_cleanup(app):
