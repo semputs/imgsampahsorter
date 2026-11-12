@@ -88,7 +88,7 @@
     </table></div>
     <p class="note">fast = 20 steps, dpmpp_2m, CFG 5. lora = DMD2 speed LoRA, 8 steps, lcm, CFG 1, strength 1.0, sgm_uniform.<br>
     <b>Changed halfway:</b> from round 6 the LoRA workflows use strength 0.7 + karras (asked for at 06:38). Those are the <b>_v2</b> rows, so for the LoRA, keep vs reload is mixed with the settings change. The fast workflows compare keep vs reload cleanly.<br>
-    <b>Changed at 08:33:</b> LoRA runs stopped (images too soft). After a restart and one warm-up, the remaining fast runs plus 20 extra rounds (11–30) of fasttantest ×3 + fasttantest2 ×3 run with "reload each run".</p>
+    <b>Changed at 08:33:</b> LoRA runs stopped (images too soft). After a restart and one warm-up, the remaining fast runs plus 10 extra rounds (11–20) of fasttantest ×3 + fasttantest2 ×3 run with "reload each run".</p>
   </section>
 
   <section class="card">
