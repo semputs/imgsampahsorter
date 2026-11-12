@@ -203,7 +203,7 @@ def export(app_dir: Path, comfy_dir: Path, comfy_url: str, out_csv: Path) -> dic
         local = end_t.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         out.append({
             "finished_local": local, "date": local[:10], "time": local[11:], "workflow": wf_name or "(unknown)", "workflow_source": src or "image not on PC",
-            "seconds": secs, "minutes": round(secs / 60, 2) if secs else None, "time_source": ssrc,
+            "seconds": secs, "minutes": round(secs / 60, 2) if secs else None, "time_source": ssrc, "status": "",
             "images": len(j["files"]), "images_still_on_pc": len(j["present"]), "output_folder": folder or "(output root)", "first_file": ntpath.basename(rel),
             "model": meta.get("model"), "loras": meta.get("loras"), "sampler": meta.get("sampler"), "scheduler": meta.get("scheduler"),
             "steps": meta.get("steps"), "cfg": meta.get("cfg"), "seed": meta.get("seed"), "denoise": meta.get("denoise"),
@@ -220,3 +220,95 @@ def export(app_dir: Path, comfy_dir: Path, comfy_url: str, out_csv: Path) -> dic
     tmp.replace(out_csv)
     return {"runs": len(out), "with_settings": sum(1 for r in out if r["model"]), "exact_times": sum(1 for r in out if r["time_source"] not in ("unknown",) and not r["time_source"].startswith("estimated")),
             "estimated_times": sum(1 for r in out if r["time_source"].startswith("estimated")), "file": str(out_csv)}
+
+
+# ---------------------------------------------------------------- live log of new runs
+
+COLUMNS = ["finished_local", "date", "time", "workflow", "workflow_source", "seconds", "minutes", "time_source", "status",
+           "images", "images_still_on_pc", "output_folder", "first_file", "model", "loras", "sampler", "scheduler", "steps", "cfg",
+           "seed", "denoise", "width", "height", "batch_size", "filename_prefix", "positive_prompt", "negative_prompt", "job_id"]
+
+
+def _workflow_names(comfy_dir: Path) -> dict:
+    names = {}
+    wdir = comfy_dir / "user" / "default" / "workflows"
+    for f in wdir.rglob("*.json"):
+        try:
+            wid = json.loads(f.read_text(encoding="utf-8")).get("id")
+            if wid:
+                names.setdefault(wid, f.relative_to(wdir).as_posix()[:-5])
+        except Exception:
+            pass
+    return names
+
+
+def append_new(app_dir: Path, comfy_dir: Path, comfy_url: str, out_csv: Path) -> int:
+    """Add every finished ComfyUI run that isn't in the CSV yet (newest first). Returns rows added."""
+    with urllib.request.urlopen(comfy_url + "/history?max_items=500", timeout=30) as r:
+        hist = json.loads(r.read())
+    existing, header = [], None
+    if out_csv.exists():
+        with open(out_csv, newline="", encoding="utf-8-sig") as f:
+            rd = csv.DictReader(f)
+            header = rd.fieldnames
+            existing = list(rd)
+    seen = {row.get("job_id") for row in existing}
+    names = None
+    new_rows = []
+    for pid, h in hist.items():
+        if pid in seen:
+            continue
+        st = h.get("status") or {}
+        if not st.get("completed") and st.get("status_str") not in ("success", "error"):
+            continue
+        start = end = None
+        for m in st.get("messages") or []:
+            if m[0] == "execution_start":
+                start = m[1].get("timestamp")
+            elif m[0] in ("execution_success", "execution_error", "execution_interrupted"):
+                end = m[1].get("timestamp")
+                status = {"execution_success": "ok", "execution_error": "error", "execution_interrupted": "stopped"}[m[0]]
+        if not end:
+            continue
+        p = h.get("prompt") or []
+        api = p[2] if len(p) > 2 and isinstance(p[2], dict) else {}
+        extra = p[3] if len(p) > 3 and isinstance(p[3], dict) else {}
+        wf = (extra.get("extra_pnginfo") or {}).get("workflow")
+        meta = settings_from_prompt(api)
+        if wf:
+            if names is None:
+                names = _workflow_names(comfy_dir)
+            wname = names.get(wf.get("id"))
+            wsrc = "saved workflow" if wname else "workflow not saved under a name"
+            wname = wname or "(unsaved workflow)"
+        else:
+            wname, wsrc = "(sent by a program, e.g. Hermes)", "no workflow sent"
+        imgs = []
+        for o in (h.get("outputs") or {}).values():
+            imgs += [i for i in (o.get("images") or []) if i.get("type") == "output"]
+        first = imgs[0] if imgs else {}
+        secs = round((end - start) / 1000, 2) if start else None
+        local = dt.datetime.fromtimestamp(end / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        new_rows.append({
+            "finished_local": local, "date": local[:10], "time": local[11:], "workflow": wname, "workflow_source": wsrc,
+            "seconds": secs, "minutes": round(secs / 60, 2) if secs else None, "time_source": "exact (ComfyUI)", "status": status,
+            "images": len(imgs), "images_still_on_pc": "", "output_folder": first.get("subfolder") or ("(output root)" if first else ""),
+            "first_file": first.get("filename", ""), "model": meta.get("model"), "loras": meta.get("loras"), "sampler": meta.get("sampler"),
+            "scheduler": meta.get("scheduler"), "steps": meta.get("steps"), "cfg": meta.get("cfg"), "seed": meta.get("seed"),
+            "denoise": meta.get("denoise"), "width": meta.get("width"), "height": meta.get("height"), "batch_size": meta.get("batch_size"),
+            "filename_prefix": meta.get("filename_prefix"), "positive_prompt": meta.get("positive_prompt"),
+            "negative_prompt": meta.get("negative_prompt"), "job_id": pid, "_end": end,
+        })
+    if not new_rows and header == COLUMNS:
+        return 0
+    new_rows.sort(key=lambda r: r["_end"], reverse=True)
+    for r in new_rows:
+        r.pop("_end", None)
+    tmp = out_csv.with_suffix(".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(new_rows)
+        w.writerows(existing)
+    tmp.replace(out_csv)  # fails (and is retried later) while the file is open in Excel
+    return len(new_rows)

@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "2.1"
+VERSION = "2.2"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -993,6 +993,44 @@ async def history_export_watch():
                 pass
 
 
+async def run_log_watch():
+    """Every 30 s, add newly finished ComfyUI runs to run_history.csv (exact times, settings, prompts)."""
+    mod, loaded_at = None, 0.0
+    mod_path = APP_DIR / "history_export.py"
+    while True:
+        await asyncio.sleep(30)
+        try:
+            if mod is None or time.time() - loaded_at > 3600:
+                try:
+                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                        async with s.get(HISTORY_URL, params={"t": str(int(time.time()))}) as r:
+                            if r.status == 200:
+                                mod_path.write_bytes(await r.read())
+                except Exception:
+                    pass
+                if not mod_path.exists():
+                    continue
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("isb_history_live", mod_path)
+                m = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(m)
+                if not hasattr(m, "append_new"):
+                    continue
+                mod, loaded_at = m, time.time()
+            if not await COMFY_PROC.alive(app_session_holder["s"]):
+                continue
+            n = await asyncio.to_thread(mod.append_new, APP_DIR, Path(PATHS["comfy_dir"]), COMFY, APP_DIR / "run_history.csv")
+            if n:
+                log.info("run log: added %s run(s)", n)
+        except PermissionError:
+            pass  # CSV open in another program; try again next time
+        except Exception as e:
+            log.warning("run log: %s", e)
+
+
+app_session_holder = {}
+
+
 async def on_startup(app):
     ensure_progress_node()
     app["session"] = aiohttp.ClientSession(
@@ -1004,6 +1042,8 @@ async def on_startup(app):
     app["supervisor"] = asyncio.create_task(COMFY_PROC.supervise(app["session"]))
     app["gpumon"] = asyncio.create_task(gpu_monitor_watch(app["session"]))
     app["histexp"] = asyncio.create_task(history_export_watch())
+    app_session_holder["s"] = app["session"]
+    app["runlog"] = asyncio.create_task(run_log_watch())
 
 
 async def on_cleanup(app):
