@@ -87,7 +87,8 @@
       <tbody id="tbody"></tbody>
     </table></div>
     <p class="note">fast = 20 steps, dpmpp_2m, CFG 5. lora = DMD2 speed LoRA, 8 steps, lcm, CFG 1, strength 1.0, sgm_uniform.<br>
-    <b>Changed halfway:</b> from round 6 the LoRA workflows use strength 0.7 + karras (asked for at 06:38). Those are the <b>_v2</b> rows, so for the LoRA, keep vs reload is mixed with the settings change. The fast workflows compare keep vs reload cleanly.</p>
+    <b>Changed halfway:</b> from round 6 the LoRA workflows use strength 0.7 + karras (asked for at 06:38). Those are the <b>_v2</b> rows, so for the LoRA, keep vs reload is mixed with the settings change. The fast workflows compare keep vs reload cleanly.<br>
+    <b>Changed at 08:33:</b> LoRA runs stopped (images too soft). After a restart and one warm-up, the remaining fast runs plus 20 extra rounds (11–30) of fasttantest ×3 + fasttantest2 ×3 run with "reload each run".</p>
   </section>
 
   <section class="card">
@@ -210,11 +211,14 @@
     var TW = Math.max(300, tbx.clientWidth), TH = 230, ml = 52, mr = 10, mt = 8, mb = 24;
     var ymax = Math.max.apply(null, pts.map(function (r) { return r.seconds; })) * 1.1;
     var sv = el('svg', { viewBox: '0 0 ' + TW + ' ' + TH, height: TH, role: 'img', 'aria-label': 'Time of every run' }, tbx);
-    var X = function (n) { return ml + (TW - ml - mr) * (n - 1) / (order.length - 1); };
+    var pos = {}; order.forEach(function (o, i) { pos[o.n] = i; });
+    var X = function (n) { var i = pos[n] != null ? pos[n] : n - 1; return ml + (TW - ml - mr) * i / Math.max(1, order.length - 1); };
     var Y = function (s) { return TH - mb - (TH - mb - mt) * s / ymax; };
     [0, .25, .5, .75, 1].forEach(function (f) { var v = ymax * f; el('line', { x1: ml, x2: TW - mr, y1: Y(v), y2: Y(v), stroke: 'var(--line)' }, sv); txt(sv, ml - 6, Y(v), fmt(v), 'end'); });
     var sw = order.filter(function (o) { return o.mode === 'reload'; })[0];
-    if (sw) { el('line', { x1: X(sw.n - .5), x2: X(sw.n - .5), y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '4 3' }, sv); }
+    if (sw) { var xs = X(sw.n) - 3; el('line', { x1: xs, x2: xs, y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '4 3' }, sv); }
+    var ex = order.filter(function (o) { return o.round >= 11; })[0];
+    if (ex) { var xe = X(ex.n) - 3; el('line', { x1: xe, x2: xe, y1: mt, y2: TH - mb, stroke: 'var(--muted)', 'stroke-dasharray': '2 3' }, sv); txt(sv, xe + 4, mt + 6, 'LoRA stopped, extra rounds'); }
     txt(sv, ml, TH - 8, '← keep on card');
     txt(sv, TW - mr, TH - 8, 'reload, LoRA v2 →', 'end');
     pts.forEach(function (r) {
