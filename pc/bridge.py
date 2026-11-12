@@ -28,7 +28,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-VERSION = "2.2"
+VERSION = "2.3"
 APP_DIR = Path(os.environ.get("ISB_APP_DIR") or (Path(os.environ.get("LOCALAPPDATA", ".")) / "ImgSampahBridge"))
 PORT = int(os.environ.get("ISB_PORT", "8190"))
 COMFY_PORT = int(os.environ.get("ISB_COMFY_PORT", "8188"))
@@ -993,6 +993,28 @@ async def history_export_watch():
                 pass
 
 
+def run_log_path() -> Path:
+    """Where the run log lives: the path in run_log_path.txt if set, else run_history.csv here.
+    On first use of a new path, the existing log is copied there so no history is lost."""
+    default = APP_DIR / "run_history.csv"
+    try:
+        txt = (APP_DIR / "run_log_path.txt").read_text(encoding="utf-8-sig").strip()
+    except Exception:
+        txt = ""
+    if not txt:
+        return default
+    target = Path(txt)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists() and default.exists():
+            import shutil
+            shutil.copyfile(default, target)
+    except Exception as e:
+        log.warning("run log path %s: %s", target, e)
+        return default
+    return target
+
+
 async def run_log_watch():
     """Every 30 s, add newly finished ComfyUI runs to run_history.csv (exact times, settings, prompts)."""
     mod, loaded_at = None, 0.0
@@ -1019,7 +1041,7 @@ async def run_log_watch():
                 mod, loaded_at = m, time.time()
             if not await COMFY_PROC.alive(app_session_holder["s"]):
                 continue
-            n = await asyncio.to_thread(mod.append_new, APP_DIR, Path(PATHS["comfy_dir"]), COMFY, APP_DIR / "run_history.csv")
+            n = await asyncio.to_thread(mod.append_new, APP_DIR, Path(PATHS["comfy_dir"]), COMFY, run_log_path())
             if n:
                 log.info("run log: added %s run(s)", n)
         except PermissionError:
