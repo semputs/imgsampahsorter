@@ -269,11 +269,6 @@ class ComfyActivity : Activity() {
         val power = Ui.button(this, "⏻ Stop appgentic5", Ui.RED).apply { setOnClickListener { powerDialog() } }
         powerButton = power
         box.addView(row(power), lp(top = 6))
-        box.addView(row(
-            Ui.button(this, "📊 Speed test (live)", Ui.BLUE).apply {
-                setOnClickListener { startActivity(Intent(this@ComfyActivity, ReportActivity::class.java)) }
-            },
-        ), lp(top = 6))
 
         box.addView(Ui.text(this, "Workflows", 20f), lp(top = 20))
         box.addView(Ui.text(this, "Tap to edit & generate.", 13f, Ui.TEXT_DIM))
