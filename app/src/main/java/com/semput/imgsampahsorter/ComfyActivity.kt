@@ -741,6 +741,7 @@ class ComfyActivity : Activity() {
         val list = (0 until nodes.length()).mapNotNull { nodes.optJSONObject(it) }.sortedWith(
             compareBy<JSONObject>({ it.optJSONArray("pos")?.optDouble(1) ?: 0.0 }, { it.optJSONArray("pos")?.optDouble(0) ?: 0.0 })
         )
+        promptNodeFor(wf)?.let { box.addView(scenesCard(wf, it), lp(top = 8)) }
         var shown = 0
         for (node in list) {
             val card = nodeCard(node) ?: continue
@@ -769,7 +770,8 @@ class ComfyActivity : Activity() {
             textSize = 14f
             setOnClickListener { saveEdit { toast("Saved") } }
         }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
-        val gen = Ui.button(this, "▶ Generate", Ui.GREEN).apply { textSize = 14f }
+        val gen = Ui.button(this, genLabel(), Ui.GREEN).apply { textSize = 14f }
+        genButton = gen
         gen.setOnClickListener { generate(gen) }
         bar.addView(gen, LinearLayout.LayoutParams(0, -2, 1.4f).apply { leftMargin = dp(6) })
         content.addView(bar, lp(top = 8))
@@ -879,6 +881,146 @@ class ComfyActivity : Activity() {
         }
     }
 
+    // ---------------------------------------------------------------- scenes
+    // Extra prompts kept in the workflow file (extra.isb_scenes). Scene 1 is the workflow's own
+    // positive prompt; scenes 2+ are queued as separate runs with the same seed, size and batch.
+
+    private inner class PromptNode(val nodeId: Int, val index: Int, val title: String, val values: JSONArray) {
+        fun text() = values.optString(index)
+    }
+
+    private var genButton: TextView? = null
+
+    private fun findNode(wf: JSONObject, id: Int): JSONObject? {
+        val nodes = wf.optJSONArray("nodes") ?: return null
+        return (0 until nodes.length()).mapNotNull { nodes.optJSONObject(it) }.firstOrNull { it.optInt("id", -1) == id }
+    }
+
+    /** The node holding the positive prompt text (what feeds the sampler's "positive" input). */
+    private fun promptNodeFor(wf: JSONObject): PromptNode? {
+        val nodes = wf.optJSONArray("nodes") ?: return null
+        val all = (0 until nodes.length()).mapNotNull { nodes.optJSONObject(it) }
+        val links = HashMap<Int, Int>()  // link id -> origin node id
+        wf.optJSONArray("links")?.let { a ->
+            for (i in 0 until a.length()) {
+                when (val l = a.opt(i)) {
+                    is JSONArray -> links[l.optInt(0)] = l.optInt(1)
+                    is JSONObject -> links[l.optInt("id")] = l.optInt("origin_id")
+                }
+            }
+        }
+        fun byId(id: Int?) = id?.let { x -> all.firstOrNull { it.optInt("id", -1) == x } }
+        fun textIndex(n: JSONObject): Int? {
+            val v = n.optJSONArray("widgets_values") ?: return null
+            val slots = slotsFor(nodeInfo[n.optString("type")])?.takeIf { it.size == v.length() }
+            for (i in 0 until v.length()) {
+                if (v.opt(i) !is String) continue
+                val sl = slots?.get(i)
+                if (sl != null && (sl.options != null || sl.control || sl.hidden)) continue
+                if (sl == null && v.optString(i) in controlValues) continue
+                return i
+            }
+            return null
+        }
+        fun make(n: JSONObject): PromptNode? {
+            val i = textIndex(n) ?: return null
+            val title = n.optString("title").ifEmpty {
+                nodeInfo[n.optString("type")]?.optString("display_name")?.ifEmpty { null } ?: n.optString("type")
+            }
+            return PromptNode(n.optInt("id"), i, title, n.optJSONArray("widgets_values")!!)
+        }
+        for (n in all) {
+            if (n.optInt("mode") == 2 || n.optInt("mode") == 4) continue
+            val ins = n.optJSONArray("inputs") ?: continue
+            for (k in 0 until ins.length()) {
+                val inp = ins.optJSONObject(k) ?: continue
+                if (inp.optString("name") != "positive" || inp.isNull("link")) continue
+                var src = byId(links[inp.optInt("link")])
+                var hops = 0
+                while (src != null && hops < 6) {
+                    make(src)?.let { return it }
+                    // pass through reroutes and similar nodes
+                    val up = src.optJSONArray("inputs")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }
+                        ?.firstOrNull { !it.isNull("link") } ?: break
+                    src = byId(links[up.optInt("link")])
+                    hops++
+                }
+            }
+        }
+        return null
+    }
+
+    private fun scenesOf(wf: JSONObject): JSONArray {
+        val extra = wf.optJSONObject("extra") ?: JSONObject().also { wf.put("extra", it) }
+        return extra.optJSONArray("isb_scenes") ?: JSONArray().also { extra.put("isb_scenes", it) }
+    }
+
+    private fun genLabel(): String {
+        val wf = editWf ?: return "▶ Generate"
+        val n = if (promptNodeFor(wf) != null) wf.optJSONObject("extra")?.optJSONArray("isb_scenes")?.length() ?: 0 else 0
+        return if (n > 0) "▶ Generate ${n + 1} scenes" else "▶ Generate"
+    }
+
+    private fun scenesCard(wf: JSONObject, pn: PromptNode): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(this@ComfyActivity, Ui.SURFACE, 10)
+            setPadding(dp(12), dp(10), dp(12), dp(12))
+        }
+        fillScenes(card, wf, pn)
+        return card
+    }
+
+    private fun fillScenes(card: LinearLayout, wf: JSONObject, pn: PromptNode) {
+        card.removeAllViews()
+        val scenes = scenesOf(wf)
+        fun refresh() { editDirty = true; genButton?.text = genLabel(); fillScenes(card, wf, pn) }
+        fun textOf(i: Int) = if (i == 0) pn.text() else scenes.optString(i - 1)  // i = scene number - 1
+        card.addView(Ui.text(this, "Scenes", 15f).apply { typeface = Typeface.DEFAULT_BOLD })
+        card.addView(Ui.text(this,
+            "Scene 1 is the prompt in “${pn.title}” below. Each extra scene is its own run with the same size, batch and seed.",
+            12f, Ui.TEXT_DIM), lp(top = 4))
+        fun small(label: String, onClick: () -> Unit) = Ui.button(this, label, Ui.GREY).apply {
+            textSize = 12f
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { onClick() }
+        }
+        for (k in 0 until scenes.length()) {
+            val num = k + 2
+            card.addView(Ui.text(this, "Scene $num", 12f, Ui.TEXT_DIM), lp(top = 10))
+            val e = edit("", scenes.optString(k), true)
+            e.addTextChangedListener(watcher { scenes.put(k, it); editDirty = true })
+            card.addView(e)
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            fun copyFrom(from: Int) {
+                val t = textOf(from)
+                val cur = scenes.optString(k)
+                val apply = { scenes.put(k, t); refresh() }
+                if (cur.isBlank() || cur == t) apply()
+                else AlertDialog.Builder(this).setTitle("Replace scene $num with scene ${from + 1}?")
+                    .setPositiveButton("Replace") { _, _ -> apply() }.setNegativeButton("Cancel", null).show()
+            }
+            if (num > 2) row.addView(small("Copy scene 1") { copyFrom(0) })
+            row.addView(small("Copy scene ${num - 1}") { copyFrom(num - 2) },
+                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(if (num > 2) 6 else 0) })
+            row.addView(small("✕ Delete") {
+                AlertDialog.Builder(this).setTitle("Delete scene $num?")
+                    .setPositiveButton("Delete") { _, _ -> scenes.remove(k); refresh() }
+                    .setNegativeButton("Cancel", null).show()
+            }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(6) })
+            card.addView(row, lp(top = 4))
+        }
+        val last = scenes.length() + 1
+        card.addView(Ui.button(this, "+ Add scene ${last + 1} (copy of scene $last)", Ui.GREY).apply {
+            textSize = 13f
+            setOnClickListener {
+                if (scenes.length() >= 30) { toast("That's the limit (31 scenes)"); return@setOnClickListener }
+                scenes.put(textOf(last - 1)); refresh()
+            }
+        }, lp(top = 10))
+    }
+
+
     private val rng = java.util.Random()
 
     /** Returns true if any seed value changed. */
@@ -916,11 +1058,32 @@ class ComfyActivity : Activity() {
         // Apply each seed's "control after generate" (randomize / increment / decrement) now, so every
         // Generate is a new job. Otherwise appgentic5 sees the same seed and just returns the cached images.
         if (bumpSeeds(wf)) editDirty = true
+        val pn = promptNodeFor(wf)
+        val scenes = if (pn != null) scenesOf(wf) else JSONArray()
         saveEdit {
-            runInEditor(wf, name, batch) { msg ->
+            val items = ArrayList<Pair<JSONObject, Int>>()
+            if (pn == null || scenes.length() == 0) {
+                items.add(wf to batch)
+            } else {
+                // Every scene uses the same seed, size and batch; only the prompt text differs.
+                // With ×N, the whole set of scenes runs N times, each round with the next seed.
+                val texts = listOf(pn.text()) + (0 until scenes.length()).map { scenes.optString(it) }
+                val round = JSONObject(wf.toString())
+                for (r in 0 until batch) {
+                    if (r > 0) bumpSeeds(round)
+                    for (t in texts) {
+                        val copy = JSONObject(round.toString())
+                        findNode(copy, pn.nodeId)?.optJSONArray("widgets_values")?.put(pn.index, t)
+                        items.add(copy to 1)
+                    }
+                }
+                items.add(wf to 0)  // leave the editor showing the saved workflow (scene 1), not the last scene
+            }
+            val runs = items.sumOf { it.second }
+            runJobs(items, name) { msg ->
                 btn.isEnabled = true
-                btn.text = "▶ Generate"
-                if (msg == "queued") toast("Queued ×$batch")
+                btn.text = genLabel()
+                if (msg == "queued" || msg == "loaded") toast(if (runs == batch) "Queued ×$batch" else "Queued $runs runs")
                 else AlertDialog.Builder(this).setTitle("Couldn't start")
                     .setMessage(msg.removePrefix("error: "))
                     .setPositiveButton("Open full editor") { _, _ -> show(Screen.EDITOR) }
@@ -1103,12 +1266,19 @@ class ComfyActivity : Activity() {
     }
 
     /** Load [wf] into the appgentic5 page and (if [queue] > 0) queue it [queue] times. */
-    private fun runInEditor(wf: JSONObject, name: String?, queue: Int, cb: (String) -> Unit) {
+    private fun runInEditor(wf: JSONObject, name: String?, queue: Int, cb: (String) -> Unit) =
+        runJobs(listOf(wf to queue), name, cb)
+
+    /** For each (workflow, n): load it into the appgentic5 page, then queue it n times (0 = just load). */
+    private fun runJobs(items: List<Pair<JSONObject, Int>>, name: String?, cb: (String) -> Unit) {
         setupWeb()
         val w = web ?: return cb("error: not connected")
         pendingCb?.invoke("error: replaced by a newer request")
         pendingCb = cb
         val nameJs = if (name == null) "null" else JSONObject.quote(name.removeSuffix(".json"))
+        val itemsJs = JSONArray().apply {
+            items.forEach { (job, q) -> put(JSONObject().put("wf", job).put("q", q)) }
+        }.toString()
         val js = """
             (async () => {
               const done = (m) => { try { IsbBridge.done(String(m)); } catch (e) {} };
@@ -1121,14 +1291,23 @@ class ComfyActivity : Activity() {
                   await new Promise(r => setTimeout(r, 500));
                 }
                 if (!app || !app.graph) { done('error: The appgentic5 page did not finish loading. Is appgentic5 running on the PC?'); return; }
-                const wf = $wf;
-                try { await app.loadGraphData(wf, true, true, $nameJs); }
-                catch (e) { await app.loadGraphData(wf, true, true, null); }
-                if ($queue > 0) {
-                  await new Promise(r => setTimeout(r, 400));
-                  const ok = await app.queuePrompt(0, $queue);
-                  done(ok === false ? 'error: appgentic5 refused the job. Open the full editor to see the red error.' : 'queued');
-                } else done('loaded');
+                const items = $itemsJs;
+                let queued = 0;
+                for (const it of items) {
+                  try { await app.loadGraphData(it.wf, true, true, $nameJs); }
+                  catch (e) { await app.loadGraphData(it.wf, true, true, null); }
+                  if (it.q > 0) {
+                    await new Promise(r => setTimeout(r, 400));
+                    const ok = await app.queuePrompt(0, it.q);
+                    if (ok === false) {
+                      done('error: appgentic5 refused the job' + (queued ? ' after ' + queued + ' run(s) were queued' : '') +
+                           '. Open the full editor to see the red error.');
+                      return;
+                    }
+                    queued += it.q;
+                  }
+                }
+                done(queued > 0 ? 'queued' : 'loaded');
               } catch (e) { done('error: ' + (e && e.message ? e.message : e)); }
               finally { window.__isbBusy = false; }
             })();
@@ -1142,7 +1321,7 @@ class ComfyActivity : Activity() {
                 pendingCb = null
                 cb("error: Timed out waiting for appgentic5. Is it still starting on the PC?")
             }
-        }, 120_000)
+        }, 120_000L + 5_000L * items.size)
     }
 
     /**
